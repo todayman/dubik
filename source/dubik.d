@@ -21,6 +21,7 @@ import std.c.linux.socket;
 import std.c.linux.rxrpc;
 
 import core.stdc.errno;
+import core.sys.posix.poll;
 
 int main(string[] args)
 {
@@ -102,5 +103,54 @@ void ping()
 
 void pong()
 {
-    writeln("Sending pong!");
+    int server_socket = socket(AF_RXRPC, SOCK_DGRAM, AF_INET);
+
+    sockaddr_rxrpc my_addr;
+    my_addr.srx_family = AF_RXRPC;
+    my_addr.srx_service = PING_SERVICE_ID; /* 0 indicates a client */
+    my_addr.transport_type = SOCK_DGRAM;
+    my_addr.transport.family = AF_INET;
+    my_addr.transport.sin.sin_port = htons(PING_SERVER_PORT);
+    my_addr.transport.sin.sin_addr.s_addr = 0;
+    bind(server_socket, cast(sockaddr*)&my_addr, cast(uint)typeof(my_addr).sizeof);
+
+    listen(server_socket, 100);
+
+    ubyte[128] control;
+    uint controllen = 0;
+
+    char[16] msg_string;
+    iovec msg_contents = { cast(void*)msg_string.ptr, msg_string.length };
+    ubyte[24] msg_name;
+    msghdr msg;
+    msg.msg_name = msg_name.ptr;
+    msg.msg_namelen = msg_name.length;
+    msg.msg_iovlen = 1;
+    msg.msg_iov = &msg_contents;
+    msg.msg_control = control.ptr;
+    msg.msg_controllen = control.length;
+    msg.msg_flags = 0;
+
+    // Wait for a message
+    writeln("Waiting for a message.");
+
+    pollfd poll_info;
+    poll_info.fd = server_socket;
+    poll_info.events = POLLIN;
+    int poll_success = poll(&poll_info, 1, -1);
+
+    if( poll_success < 0 )
+    {
+        writeln("There was an error waiting for a connection.");
+        return;
+    }
+
+    ssize_t success = recvmsg(server_socket, &msg, 0);
+
+    if( success == -1 )
+    {
+        writeln("Receive failed!");
+        writefln("Errno = %d", errno);
+        return;
+    }
 }
