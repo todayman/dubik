@@ -18,7 +18,36 @@
 
 import std.stdio;
 
-void main()
+int main(string[] args)
 {
-    writeln("Hello, world!");
+    if( args.length != 2 )
+    {
+        writeln("Exactly one argument expected.");
+        return 1;
+    }
+
+    if( args[1] == "--ping" )
+    {
+        ping();
+    }
+    else if( args[1] == "--pong" )
+    {
+        pong();
+    }
+    else
+    {
+        writeln("Expected argument to be either \"--ping\" or \"--pong\".");
+    }
+
+    return 0;
+}
+
+void ping()
+{
+    writeln("Sending ping!");
+}
+
+void pong()
+{
+    writeln("Sending pong!");
 }
