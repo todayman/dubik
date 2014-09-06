@@ -1,0 +1,11 @@
+{
+	"name": "dubik",
+	"description": "An implementation of the UBIK replication protocol",
+	"copyright": "Copyright © 2014, Paul O'Neil",
+    "license": "AGPL-3.0",
+    "homepage": "https://github.com/todayman/dubik",
+	"authors": ["Paul O'Neil"],
+	"dependencies": {
+	},
+    "targetType": "executable"
+}
