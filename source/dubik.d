@@ -20,6 +20,8 @@ import std.stdio;
 import std.c.linux.socket;
 import std.c.linux.rxrpc;
 
+import core.stdc.errno;
+
 int main(string[] args)
 {
     if( args.length != 2 )
@@ -73,7 +75,6 @@ void ping()
     target_addr.transport.family = AF_INET;
     target_addr.transport.sin.sin_port = htons(PING_SERVER_PORT);
     target_addr.transport.sin.sin_addr.s_addr = LOCALHOST_IP;
-    //target_addr.transport.sin_address =  htons(
 
     ubyte[128] control;
     uint controllen = 0;
@@ -90,6 +91,13 @@ void ping()
     msg.msg_flags = 0;
 
     ssize_t success = sendmsg(send_socket, &msg, 0);
+
+    if( success == -1 )
+    {
+        writeln("Send failed!");
+        writefln("Errno = %d", errno);
+        return;
+    }
 }
 
 void pong()
