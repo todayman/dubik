@@ -60,33 +60,61 @@ void ping()
 {
     int send_socket = socket(AF_RXRPC, SOCK_DGRAM, AF_INET);
 
+    int security_level = RXRPC_SECURITY_PLAIN;
+    int result = setsockopt(send_socket, SOL_RXRPC, RXRPC_MIN_SECURITY_LEVEL, &security_level, typeof(security_level).sizeof);
+    if( result < 0 )
+    {
+        writeln("setsockopt failed");
+        writefln("Errno = %d", errno);
+        return;
+    }
+
     sockaddr_rxrpc my_addr;
     my_addr.srx_family = AF_RXRPC;
     my_addr.srx_service = 0; /* 0 indicates a client */
     my_addr.transport_type = SOCK_DGRAM;
+    my_addr.transport_len = sockaddr_in.sizeof;
     my_addr.transport.family = AF_INET;
-    my_addr.transport.sin.sin_port = htons(PING_CLIENT_PORT);
+    my_addr.transport.sin.sin_port = 0;//htons(PING_CLIENT_PORT);
     my_addr.transport.sin.sin_addr.s_addr = 0;
-    bind(send_socket, cast(sockaddr*)&my_addr, cast(uint)typeof(my_addr).sizeof);
+    result = bind(send_socket, cast(sockaddr*)&my_addr, cast(uint)typeof(my_addr).sizeof);
+    if(result < 0)
+    {
+        writeln("bind failed");
+        writefln("Errno = %d", errno);
+        return;
+    }
 
     sockaddr_rxrpc target_addr;
     target_addr.srx_family = AF_RXRPC;
     target_addr.srx_service = PING_SERVICE_ID;
     target_addr.transport_type = SOCK_DGRAM;
+    target_addr.transport_len = sockaddr_in.sizeof;
     target_addr.transport.family = AF_INET;
     target_addr.transport.sin.sin_port = htons(PING_SERVER_PORT);
     target_addr.transport.sin.sin_addr.s_addr = LOCALHOST_IP;
 
+    result = connect(send_socket, cast(sockaddr*)&target_addr, typeof(target_addr).sizeof);
+    if(result < 0 )
+    {
+        writeln("connect failed");
+        writefln("Errno = %d", errno);
+        return;
+    }
+
+
     ubyte[128] control;
     uint controllen = 0;
     addCallID(control, 1, controllen);
+    writefln("control length is %d", controllen);
 
     string msg_string = "PING";
     iovec msg_contents = { cast(void*)msg_string.ptr, msg_string.length };
     msghdr msg;
+    msg.msg_name = null;
     msg.msg_namelen = 0;
-    msg.msg_iovlen = 1;
     msg.msg_iov = &msg_contents;
+    msg.msg_iovlen = 1;
     msg.msg_control = control.ptr;
     msg.msg_controllen = controllen;
     msg.msg_flags = 0;
@@ -109,6 +137,7 @@ void pong()
     my_addr.srx_family = AF_RXRPC;
     my_addr.srx_service = PING_SERVICE_ID; /* 0 indicates a client */
     my_addr.transport_type = SOCK_DGRAM;
+    my_addr.transport_len = sockaddr_in.sizeof;
     my_addr.transport.family = AF_INET;
     my_addr.transport.sin.sin_port = htons(PING_SERVER_PORT);
     my_addr.transport.sin.sin_addr.s_addr = 0;
@@ -146,7 +175,6 @@ void pong()
     }
 
     ssize_t success = recvmsg(server_socket, &msg, 0);
-
     if( success == -1 )
     {
         writeln("Receive failed!");
