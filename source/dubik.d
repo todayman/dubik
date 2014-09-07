@@ -157,30 +157,54 @@ struct ControlMessage
     }
 }
 
+// FIXME  When I do foreach over this, the list is empty afterwards.
+// It would be nice to do a non-destructive loop.
 struct ControlMessageList
 {
-    private msghdr * _msg;
-    private cmsghdr * _current;
+    private ControlMessage[] _arr;
 
     this(msghdr* msg)
     {
-        _msg = msg;
-        _current = CMSG_FIRSTHDR(msg);
+        cmsghdr* current = CMSG_FIRSTHDR(msg);
+        uint counter = 0;
+        while(current != null)
+        {
+            current = CMSG_NXTHDR(msg, current);
+            ++counter;
+        }
+
+        _arr.length = counter;
+        current = CMSG_FIRSTHDR(msg);
+        foreach( ref ControlMessage new_msg ; _arr )
+        {
+            new_msg = ControlMessage(current);
+            current = CMSG_NXTHDR(msg, current);
+        }
     }
 
-    bool empty()
+    @property bool empty()
     {
-        return _current == null;
+        return _arr.length > 0;
     }
 
-    ControlMessage front()
+    @property ControlMessage front()
     {
-        return ControlMessage(_current);
+        return _arr[0];
     }
 
-    void popFront()
+    @property void popFront()
     {
-        _current = CMSG_NXTHDR(_msg, _current);
+        _arr = _arr[1..$];
+    }
+
+    @property ulong length()
+    {
+        return _arr.length;
+    }
+
+    ControlMessage opIndex(uint idx)
+    {
+        return _arr[idx];
     }
 }
 
