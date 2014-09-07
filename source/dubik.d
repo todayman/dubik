@@ -211,24 +211,40 @@ void ping()
     uint controllen = 0;
     addCallID(control, 1, controllen);
 
-    string msg_string = "PING";
-    iovec msg_contents = { cast(void*)msg_string.ptr, msg_string.length };
-    msghdr msg;
-    msg.msg_name = &target_addr;
-    msg.msg_namelen = sockaddr_rxrpc.sizeof;
-    msg.msg_iov = &msg_contents;
-    msg.msg_iovlen = 1;
-    msg.msg_control = control.ptr;
-    msg.msg_controllen = controllen;
-    msg.msg_flags = 0;
-
-    ssize_t success = sendmsg(send_socket, &msg, 0);
-
-    if( success == -1 )
     {
-        writeln("Send failed!");
-        writefln("Errno = %d", errno);
-        return;
+        string msg_string = "PING";
+        iovec msg_contents = { cast(void*)msg_string.ptr, msg_string.length };
+        msghdr msg;
+        msg.msg_name = &target_addr;
+        msg.msg_namelen = sockaddr_rxrpc.sizeof;
+        msg.msg_iov = &msg_contents;
+        msg.msg_iovlen = 1;
+        msg.msg_control = control.ptr;
+        msg.msg_controllen = controllen;
+        msg.msg_flags = 0;
+
+        ssize_t success = sendmsg(send_socket, &msg, 0);
+        assert(success == msg_string.length);
+    }
+
+    {
+        ubyte[128] msg_string;
+        iovec msg_contents = { cast(void*)msg_string.ptr, msg_string.length };
+        msghdr msg;
+        msg.msg_name = null;
+        msg.msg_namelen = 0;
+        msg.msg_iov = &msg_contents;
+        msg.msg_iovlen = 1;
+        msg.msg_control = control.ptr;
+        msg.msg_controllen = controllen;
+        msg.msg_flags = 0;
+
+        ssize_t success = recvmsg(send_socket, &msg, 0);
+        writeln("recvmsg = ", success, " ", errno);
+        if (success > 0) {
+            writeln("Got message from server: ",
+                cast(string)(msg_string[0 .. success]));
+        }
     }
 }
 
@@ -269,6 +285,25 @@ struct RXRPCall {
 
 void pong(RXRPCall *c, ubyte[] arg) {
     writeln("PONG MESSAGE: ", c, ":", arg);
+
+    ubyte[128] control;
+    uint controllen = 0;
+    addCallID(control, cast(ulong)c, controllen);
+
+    ubyte[] msg_string = cast(ubyte[])("PONG!  Thanks for using RX!");
+    iovec msg_contents = { cast(void*)msg_string.ptr, msg_string.length };
+
+    msghdr msg;
+    msg.msg_name = null;
+    msg.msg_namelen = 0;
+    msg.msg_iovlen = 1;
+    msg.msg_iov = &msg_contents;
+    msg.msg_control = control.ptr;
+    msg.msg_controllen = controllen;
+    msg.msg_flags = 0;
+
+    ssize_t success = sendmsg(c.socket, &msg, 0);
+    writeln("PONG SENDMSG: ", success, " ", errno);
 }
 
 void pongfa(RXRPCall *c) {
@@ -301,25 +336,23 @@ void server()
 
     ubyte[128] msg_string;
     iovec msg_contents = { cast(void*)msg_string.ptr, msg_string.length };
+
     ubyte[1024] msg_name;
     msghdr msg;
-    msg.msg_name = msg_name.ptr;
-    msg.msg_namelen = msg_name.length;
+
     msg.msg_iovlen = 1;
     msg.msg_iov = &msg_contents;
-    msg.msg_control = control.ptr;
-    msg.msg_controllen = control.length;
     msg.msg_flags = 0;
 
     // Wait for a message
-    writeln("Looping... callback: ", cast(ulong)&pong);
-
+    writeln("Looping...");
     pollfd poll_info;
     poll_info.fd = server_socket;
     poll_info.events = POLLIN;
-
     while(poll(&poll_info, 1, -1)) {
 
+        msg.msg_name = msg_name.ptr;
+        msg.msg_namelen = msg_name.length;
         msg.msg_iov.iov_len = msg_string.length;
         msg.msg_control = control.ptr;
         msg.msg_controllen = control.length;
@@ -354,6 +387,7 @@ void server()
                     auto c = new RXRPCall;
                     c.socket  = server_socket;
                     c.cb_data = &pong;
+                    c.cb_finalack = &pongfa;
                     c.cb_err  = &pongerr;
 
                     GC.addRoot(cast(void*)c);
@@ -378,19 +412,23 @@ void server()
 
         if(!this_call.isNull) {
           RXRPCall *c = cast(RXRPCall *)(this_call.get());
-          if(success != 0) {
+          if(success > 0) {
+            writeln("Dispatch data...");
             auto a = msg_string[0 .. success];
             c.cb_data(c,a);
           }
           if(this_finack) {
+            writeln("Dispatch finalack...");
             c.cb_finalack(c);
           }
           if(!this_abort.isNull) {
+            writeln("Dispatch abort...");
             auto a = this_abort.get();
             c.cb_err(c,a);
           }
           // XXX Yes?  Maybe?  Is this really when the kernel drops the ID?
           if(!this_abort.isNull || this_finack) {
+            writeln("Enabling GC on ", cast(void *)c);
             GC.removeRoot(cast(void*)c);
           }
         }
