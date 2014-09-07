@@ -73,6 +73,12 @@ struct ControlMessage
         data = CMSG_DATA(hdr)[0 .. data.length];
     }
 
+    void setData(T)(T value)
+    {
+        data.length = T.sizeof;
+        (*cast(T*)data.ptr) = value;
+    }
+
     @property package size_t totalLength() pure nothrow const
     {
         return CMSG_LEN(data.length);
@@ -137,6 +143,11 @@ struct ControlMessageList
         return _arr[idx];
     }
 
+    void put(ControlMessage msg)
+    {
+        _arr ~= msg;
+    }
+
     size_t totalLength() pure
     {
         size_t len = 0;
@@ -147,9 +158,8 @@ struct ControlMessageList
         return len;
     }
 
-    ubyte[] serialize() pure
+    void serialize(ubyte[] result) pure
     {
-        ubyte[] result;
         result.length = totalLength();
         size_t startPoint = 0;
         foreach( const ref msg ; _arr )
@@ -157,7 +167,6 @@ struct ControlMessageList
             msg.serialize(result[startPoint .. startPoint + msg.totalLength]);
             startPoint += msg.totalLength;
         }
-        return result;
     }
 }
 
@@ -207,11 +216,21 @@ void ping()
         return;
     }
 
-    ubyte[128] control;
-    uint controllen = 0;
-    addCallID(control, 1, controllen);
-
     {
+        ControlMessageList ctrlMsgList;
+        ControlMessage ctrlMsg;
+        ctrlMsg.level = SOL_RXRPC;
+        ctrlMsg.type = RXRPC_USER_CALL_ID;
+        ctrlMsg.setData!ulong(1);
+        ctrlMsgList.put(ctrlMsg);
+        // ubyte[ctrlMsgList.totalLength] control;
+        // DMD reports that the length is not an expression, which is wrong.
+        // It's not a compile time expression , so it doesn't work when we
+        // add the () at the end, but at the very least the message is not good.
+        ubyte[] control;
+        control.length = ctrlMsgList.totalLength;
+        ctrlMsgList.serialize(control);
+
         string msg_string = "PING";
         iovec msg_contents = { cast(void*)msg_string.ptr, msg_string.length };
         msghdr msg;
@@ -220,7 +239,7 @@ void ping()
         msg.msg_iov = &msg_contents;
         msg.msg_iovlen = 1;
         msg.msg_control = control.ptr;
-        msg.msg_controllen = controllen;
+        msg.msg_controllen = ctrlMsgList.totalLength;
         msg.msg_flags = 0;
 
         ssize_t success = sendmsg(send_socket, &msg, 0);
@@ -229,6 +248,8 @@ void ping()
 
     {
         ubyte[128] msg_string;
+        ubyte[128] control;
+        socklen_t controllen = control.length;
         iovec msg_contents = { cast(void*)msg_string.ptr, msg_string.length };
         msghdr msg;
         msg.msg_name = null;
@@ -365,7 +386,7 @@ void server()
             return;
         }
         writeln("Success = ", success, " ", msg.msg_controllen);
-    
+
         ControlMessageList ctrl_msg_list = ControlMessageList(&msg);
 
         writefln("CTRL MSGS = %d", ctrl_msg_list.length);
