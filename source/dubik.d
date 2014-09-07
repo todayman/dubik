@@ -16,10 +16,13 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+import std.conv;
 import std.stdio;
+import std.typecons;
 import std.c.linux.socket;
 import std.c.linux.rxrpc;
 
+import core.memory;
 import core.stdc.errno;
 import core.sys.posix.poll;
 
@@ -37,7 +40,7 @@ int main(string[] args)
     }
     else if( args[1] == "--pong" )
     {
-        pong();
+        server();
     }
     else
     {
@@ -229,9 +232,57 @@ void ping()
     }
 }
 
-void pong()
+// XXX To a library with thee!
+void rxrpc_accept(int socket, ulong id) {
+    ubyte[128] cb;
+    uint cl = 0;
+    msghdr msg;
+
+    {
+        cmsghdr * cmsg = cast(cmsghdr*)(cb.ptr + cl);
+        cmsg.cmsg_len  = CMSG_LEN(0);
+        cmsg.cmsg_level = SOL_RXRPC;
+        cmsg.cmsg_type = RXRPC_ACCEPT;
+        cl += cmsg.cmsg_len;
+    }
+    addCallID(cb, id, cl);
+
+    msg.msg_name = null;
+    msg.msg_namelen = 0;
+    msg.msg_iov = null;
+    msg.msg_iovlen = 0;
+    msg.msg_control = cb.ptr;
+    msg.msg_controllen = cl;
+    msg.msg_flags = 0;
+
+    ssize_t success = sendmsg(socket, &msg, 0);
+    writefln("RXRPC ACCEPT sendmsg = %d %d", success, errno);
+}
+
+struct RXRPCall {
+    int                                socket;
+    void function(RXRPCall *, ubyte[]) cb_data;
+    void function(RXRPCall *)          cb_finalack;
+    void function(RXRPCall *, long)    cb_err;
+};
+
+
+void pong(RXRPCall *c, ubyte[] arg) {
+    writeln("PONG MESSAGE: ", c, ":", arg);
+}
+
+void pongfa(RXRPCall *c) {
+    writeln("PONG FINAL ACK");
+}
+
+void pongerr(RXRPCall *c, long abrt) {
+    writeln("PONG ABORT: ", c, ":", abrt);
+}
+
+void server()
 {
     int server_socket = socket(AF_RXRPC, SOCK_DGRAM, AF_INET);
+    uint next_call_id = 1024;
 
     sockaddr_rxrpc my_addr;
     my_addr.srx_family = AF_RXRPC;
@@ -261,32 +312,89 @@ void pong()
     msg.msg_flags = 0;
 
     // Wait for a message
-    writeln("Waiting for a message.");
+    writeln("Looping... callback: ", cast(ulong)&pong);
 
     pollfd poll_info;
     poll_info.fd = server_socket;
     poll_info.events = POLLIN;
-    int poll_success = poll(&poll_info, 1, -1);
 
-    if( poll_success < 0 )
-    {
-        writeln("There was an error waiting for a connection.");
-        return;
+    while(poll(&poll_info, 1, -1)) {
+
+        msg.msg_iov.iov_len = msg_string.length;
+        msg.msg_control = control.ptr;
+        msg.msg_controllen = control.length;
+
+        ssize_t success = recvmsg(server_socket, &msg, 0);
+        if( success == -1 )
+        {
+            writeln("Receive failed!");
+            writefln("Errno = %d", errno);
+            return;
+        }
+        writeln("Success = ", success, " ", msg.msg_controllen);
+    
+        ControlMessageList ctrl_msg_list = ControlMessageList(&msg);
+
+        writefln("CTRL MSGS = %d", ctrl_msg_list.length);
+        Nullable!ulong this_call;
+        Nullable!long this_abort;
+        bool this_finack;
+        for(int cix = 0; cix < ctrl_msg_list.length; cix++)
+        {
+            ControlMessage ctrl_msg = ctrl_msg_list[cix];
+
+            writefln("CTRL MSG: %d %d %d",
+                ctrl_msg.level,
+                ctrl_msg.type,
+                ctrl_msg.totalLength());
+            if(ctrl_msg.level != SOL_RXRPC) { continue; }
+
+            switch(ctrl_msg.type) {
+                case RXRPC_NEW_CALL:
+                    auto c = new RXRPCall;
+                    c.socket  = server_socket;
+                    c.cb_data = &pong;
+                    c.cb_err  = &pongerr;
+
+                    GC.addRoot(cast(void*)c);
+                    GC.setAttr(cast(void*)c, GC.BlkAttr.NO_MOVE);
+                    rxrpc_accept(server_socket, cast(ulong)c);
+                    break;
+                case RXRPC_USER_CALL_ID:
+                    this_call = *cast(ulong*)(ctrl_msg.data.ptr);
+                    break;
+                case RXRPC_ACK:
+                    this_finack = true;
+                    break;
+                case RXRPC_ABORT:
+                    this_abort = *cast(long*)(ctrl_msg.data.ptr);
+                    break;
+                default:
+                    writeln("  Unknown control message");
+                    break;
+            }
+        }
+        writeln("Done with control messages.");
+
+        if(!this_call.isNull) {
+          RXRPCall *c = cast(RXRPCall *)(this_call.get());
+          if(success != 0) {
+            auto a = msg_string[0 .. success];
+            c.cb_data(c,a);
+          }
+          if(this_finack) {
+            c.cb_finalack(c);
+          }
+          if(!this_abort.isNull) {
+            auto a = this_abort.get();
+            c.cb_err(c,a);
+          }
+          // XXX Yes?  Maybe?  Is this really when the kernel drops the ID?
+          if(!this_abort.isNull || this_finack) {
+            GC.removeRoot(cast(void*)c);
+          }
+        }
     }
 
-    ssize_t success = recvmsg(server_socket, &msg, 0);
-    if( success == -1 )
-    {
-        writeln("Receive failed!");
-        writefln("Errno = %d", errno);
-        return;
-    }
-    writeln("Success = ", success);
-
-    ControlMessageList ctrl_msg_list = ControlMessageList(&msg);
-    foreach( ctrl_msg ; ctrl_msg_list )
-    {
-        writeln("Got a control message!");
-    }
-    writeln("Done with control messages.");
+    writeln("Poll finished");
 }
