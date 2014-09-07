@@ -102,17 +102,15 @@ void ping()
         return;
     }
 
-
     ubyte[128] control;
     uint controllen = 0;
     addCallID(control, 1, controllen);
-    writefln("control length is %d", controllen);
 
     string msg_string = "PING";
     iovec msg_contents = { cast(void*)msg_string.ptr, msg_string.length };
     msghdr msg;
-    msg.msg_name = null;
-    msg.msg_namelen = 0;
+    msg.msg_name = &target_addr;
+    msg.msg_namelen = sockaddr_rxrpc.sizeof;
     msg.msg_iov = &msg_contents;
     msg.msg_iovlen = 1;
     msg.msg_control = control.ptr;
@@ -126,6 +124,63 @@ void ping()
         writeln("Send failed!");
         writefln("Errno = %d", errno);
         return;
+    }
+}
+
+struct ControlMessage
+{
+    private cmsghdr * _data;
+
+    this(cmsghdr * location)
+    {
+        _data = location;
+    }
+
+    size_t length()
+    {
+        return _data.cmsg_len;
+    }
+
+    int level()
+    {
+        return _data.cmsg_level;
+    }
+
+    int type()
+    {
+        return _data.cmsg_type;
+    }
+
+    ubyte[] data()
+    {
+        return CMSG_DATA(_data)[0 .. length];
+    }
+}
+
+struct ControlMessageList
+{
+    private msghdr * _msg;
+    private cmsghdr * _current;
+
+    this(msghdr* msg)
+    {
+        _msg = msg;
+        _current = CMSG_FIRSTHDR(msg);
+    }
+
+    bool empty()
+    {
+        return _current == null;
+    }
+
+    ControlMessage front()
+    {
+        return ControlMessage(_current);
+    }
+
+    void popFront()
+    {
+        _current = CMSG_NXTHDR(_msg, _current);
     }
 }
 
@@ -148,9 +203,9 @@ void pong()
     ubyte[128] control;
     uint controllen = 0;
 
-    char[16] msg_string;
+    ubyte[128] msg_string;
     iovec msg_contents = { cast(void*)msg_string.ptr, msg_string.length };
-    ubyte[24] msg_name;
+    ubyte[1024] msg_name;
     msghdr msg;
     msg.msg_name = msg_name.ptr;
     msg.msg_namelen = msg_name.length;
@@ -181,4 +236,12 @@ void pong()
         writefln("Errno = %d", errno);
         return;
     }
+    writeln("Success = ", success);
+
+    ControlMessageList ctrl_msg_list = ControlMessageList(&msg);
+    foreach( ctrl_msg ; ctrl_msg_list )
+    {
+        writeln("Got a control message!");
+    }
+    writeln("Done with control messages.");
 }
