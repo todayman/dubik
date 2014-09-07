@@ -56,6 +56,108 @@ static this()
     LOCALHOST_IP = inet_addr("127.0.0.1");
 }
 
+struct ControlMessage
+{
+    int level;
+    int type;
+    ubyte[] data;
+
+    this(cmsghdr * hdr)
+    {
+        level = hdr.cmsg_level;
+        type = hdr.cmsg_type;
+        data.length = (cast(ubyte*)(hdr) + hdr.cmsg_len) - CMSG_DATA(hdr);
+        data = CMSG_DATA(hdr)[0 .. data.length];
+    }
+
+    @property package size_t totalLength() pure nothrow const
+    {
+        return CMSG_LEN(data.length);
+    }
+    void serialize(ubyte[] sink) pure const
+    {
+        cmsghdr* cmsg = cast(cmsghdr*)sink.ptr;
+        cmsg.cmsg_len = CMSG_LEN(data.length);
+        cmsg.cmsg_level = level;
+        cmsg.cmsg_type = type;
+        CMSG_DATA(cmsg)[0 .. data.length] = data[];
+    }
+}
+
+// FIXME  When I do foreach over this, the list is empty afterwards.
+// It would be nice to do a non-destructive loop.
+struct ControlMessageList
+{
+    private ControlMessage[] _arr;
+
+    this(msghdr* msg)
+    {
+        cmsghdr* current = CMSG_FIRSTHDR(msg);
+        uint counter = 0;
+        while(current != null)
+        {
+            current = CMSG_NXTHDR(msg, current);
+            ++counter;
+        }
+
+        _arr.length = counter;
+        current = CMSG_FIRSTHDR(msg);
+        foreach( ref ControlMessage new_msg ; _arr )
+        {
+            new_msg = ControlMessage(current);
+            current = CMSG_NXTHDR(msg, current);
+        }
+    }
+
+    @property bool empty()
+    {
+        return _arr.length > 0;
+    }
+
+    @property ControlMessage front()
+    {
+        return _arr[0];
+    }
+
+    @property void popFront()
+    {
+        _arr = _arr[1..$];
+    }
+
+    @property ulong length()
+    {
+        return _arr.length;
+    }
+
+    ControlMessage opIndex(uint idx)
+    {
+        return _arr[idx];
+    }
+
+    size_t totalLength() pure
+    {
+        size_t len = 0;
+        foreach( msg ; _arr )
+        {
+            len += msg.totalLength;
+        }
+        return len;
+    }
+
+    ubyte[] serialize() pure
+    {
+        ubyte[] result;
+        result.length = totalLength();
+        size_t startPoint = 0;
+        foreach( const ref msg ; _arr )
+        {
+            msg.serialize(result[startPoint .. startPoint + msg.totalLength]);
+            startPoint += msg.totalLength;
+        }
+        return result;
+    }
+}
+
 void ping()
 {
     int send_socket = socket(AF_RXRPC, SOCK_DGRAM, AF_INET);
@@ -124,87 +226,6 @@ void ping()
         writeln("Send failed!");
         writefln("Errno = %d", errno);
         return;
-    }
-}
-
-struct ControlMessage
-{
-    private cmsghdr * _data;
-
-    this(cmsghdr * location)
-    {
-        _data = location;
-    }
-
-    size_t length()
-    {
-        return _data.cmsg_len;
-    }
-
-    int level()
-    {
-        return _data.cmsg_level;
-    }
-
-    int type()
-    {
-        return _data.cmsg_type;
-    }
-
-    ubyte[] data()
-    {
-        return CMSG_DATA(_data)[0 .. length];
-    }
-}
-
-// FIXME  When I do foreach over this, the list is empty afterwards.
-// It would be nice to do a non-destructive loop.
-struct ControlMessageList
-{
-    private ControlMessage[] _arr;
-
-    this(msghdr* msg)
-    {
-        cmsghdr* current = CMSG_FIRSTHDR(msg);
-        uint counter = 0;
-        while(current != null)
-        {
-            current = CMSG_NXTHDR(msg, current);
-            ++counter;
-        }
-
-        _arr.length = counter;
-        current = CMSG_FIRSTHDR(msg);
-        foreach( ref ControlMessage new_msg ; _arr )
-        {
-            new_msg = ControlMessage(current);
-            current = CMSG_NXTHDR(msg, current);
-        }
-    }
-
-    @property bool empty()
-    {
-        return _arr.length > 0;
-    }
-
-    @property ControlMessage front()
-    {
-        return _arr[0];
-    }
-
-    @property void popFront()
-    {
-        _arr = _arr[1..$];
-    }
-
-    @property ulong length()
-    {
-        return _arr.length;
-    }
-
-    ControlMessage opIndex(uint idx)
-    {
-        return _arr[idx];
     }
 }
 
