@@ -94,8 +94,6 @@ struct ControlMessage
     }
 }
 
-// FIXME  When I do foreach over this, the list is empty afterwards.
-// It would be nice to do a non-destructive loop.
 struct ControlMessageList
 {
     private ControlMessage[] _arr;
@@ -129,7 +127,7 @@ struct ControlMessageList
         return _arr[0];
     }
 
-    int opApply(int delegate(inout ref ControlMessage) dg) inout
+    int opApply(int delegate(ref const ControlMessage) dg) const
     {
         int result = 0;
         foreach(msg ; _arr)
@@ -412,10 +410,8 @@ void server()
         Nullable!ulong this_call;
         Nullable!long this_abort;
         bool this_finack;
-        for(int cix = 0; cix < ctrl_msg_list.length; cix++)
+        foreach( ctrl_msg ; ctrl_msg_list )
         {
-            ControlMessage ctrl_msg = ctrl_msg_list[cix];
-
             writefln("CTRL MSG: %d %d %d",
                 ctrl_msg.level,
                 ctrl_msg.type,
