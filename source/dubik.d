@@ -65,7 +65,7 @@ struct ControlMessage
     int type;
     ubyte[] data;
 
-    this(cmsghdr * hdr)
+    this(cmsghdr * hdr) pure
     {
         level = hdr.cmsg_level;
         type = hdr.cmsg_type;
@@ -73,17 +73,18 @@ struct ControlMessage
         data = CMSG_DATA(hdr)[0 .. data.length];
     }
 
-    void setData(T)(T value)
+    void setData(T)(T value) pure
     {
         data.length = T.sizeof;
         (*cast(T*)data.ptr) = value;
     }
 
-    @property package size_t totalLength() pure nothrow const
+    // CMSG_ALIGN and CMSG_LEN are not safe, so this isn't either
+    @property package size_t totalLength() pure nothrow @nogc const
     {
         return CMSG_LEN(data.length);
     }
-    void serialize(ubyte[] sink) pure const
+    void serialize(ubyte[] sink) pure nothrow const
     {
         cmsghdr* cmsg = cast(cmsghdr*)sink.ptr;
         cmsg.cmsg_len = CMSG_LEN(data.length);
@@ -99,7 +100,7 @@ struct ControlMessageList
 {
     private ControlMessage[] _arr;
 
-    this(msghdr* msg)
+    this(msghdr* msg) pure
     {
         cmsghdr* current = CMSG_FIRSTHDR(msg);
         uint counter = 0;
@@ -118,37 +119,55 @@ struct ControlMessageList
         }
     }
 
-    @property bool empty()
+    @property bool empty() @safe pure nothrow @nogc
     {
         return _arr.length > 0;
     }
 
-    @property ControlMessage front()
+    @property inout(ControlMessage) front() inout @safe pure nothrow @nogc
     {
         return _arr[0];
     }
 
-    @property void popFront()
+    int opApply(int delegate(inout ref ControlMessage) dg) inout
     {
-        _arr = _arr[1..$];
+        int result = 0;
+        foreach(msg ; _arr)
+        {
+            result = dg(msg);
+
+            if( result ) break;
+        }
+        return result;
+    }
+    int opApply(int delegate(ref ulong, inout ref ControlMessage) dg) inout
+    {
+        int result = 0;
+        foreach(idx, msg ; _arr)
+        {
+            result = dg(idx, msg);
+
+            if( result ) break;
+        }
+        return result;
     }
 
-    @property ulong length()
+    @property ulong length() @safe pure nothrow @nogc
     {
         return _arr.length;
     }
 
-    ControlMessage opIndex(uint idx)
+    ControlMessage opIndex(uint idx) @safe pure nothrow @nogc
     {
         return _arr[idx];
     }
 
-    void put(ControlMessage msg)
+    void put(ControlMessage msg) @safe pure
     {
         _arr ~= msg;
     }
 
-    size_t totalLength() pure
+    size_t totalLength() pure nothrow @nogc
     {
         size_t len = 0;
         foreach( msg ; _arr )
@@ -158,7 +177,7 @@ struct ControlMessageList
         return len;
     }
 
-    void serialize(ubyte[] result) pure
+    void serialize(ubyte[] result) pure nothrow
     {
         result.length = totalLength();
         size_t startPoint = 0;
