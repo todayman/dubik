@@ -119,7 +119,7 @@ struct ControlMessageList
 
     @property bool empty() @safe pure nothrow @nogc
     {
-        return _arr.length > 0;
+        return _arr.length == 0;
     }
 
     @property inout(ControlMessage) front() inout @safe pure nothrow @nogc
