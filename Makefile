@@ -1,4 +1,4 @@
-dubik: source/dubik.d
+dubik: source/dubik.d source/message_headers.d
 	../dlang_rxrpc/dmd/src/dmd -color=on \
 		-I../dlang_rxrpc/phobos \
 		-I../dlang_rxrpc/druntime/import \
@@ -6,4 +6,5 @@ dubik: source/dubik.d
 		../dlang_rxrpc/phobos/generated/linux/release/64/libphobos2.a \
 		../dlang_rxrpc/druntime/lib/libdruntime-linux64.a \
 		source/dubik.d \
+		source/message_headers.d \
 		-ofdubik
