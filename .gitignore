@@ -2,3 +2,4 @@
 .dub
 *.ps
 dubik
+dub.selections.json
