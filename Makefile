@@ -1,4 +1,4 @@
-dubik: source/dubik.d source/message_headers.d
+dubik: Makefile source/dubik.d source/message_headers.d source/rx.d
 	../dlang_rxrpc/dmd/src/dmd -color=on \
 		-I../dlang_rxrpc/phobos \
 		-I../dlang_rxrpc/druntime/import \
@@ -7,4 +7,5 @@ dubik: source/dubik.d source/message_headers.d
 		../dlang_rxrpc/druntime/lib/libdruntime-linux64.a \
 		source/dubik.d \
 		source/message_headers.d \
+		source/rx.d \
 		-ofdubik

@@ -27,6 +27,7 @@ import core.stdc.errno;
 import core.sys.posix.poll;
 
 import message_headers;
+import rx;
 
 int main(string[] args)
 {
@@ -63,49 +64,15 @@ static this()
 
 void ping()
 {
-    int send_socket = socket(AF_RXRPC, SOCK_DGRAM, AF_INET);
+    auto send_socket = rx.ClientSocket(rx.SecurityLevel.Plain);
 
-    int security_level = RXRPC_SECURITY_PLAIN;
-    int result = setsockopt(send_socket, SOL_RXRPC, RXRPC_MIN_SECURITY_LEVEL, &security_level, typeof(security_level).sizeof);
-    if( result < 0 )
-    {
-        writeln("setsockopt failed");
-        writefln("Errno = %d", errno);
-        return;
-    }
+    rx.sockaddr target_addr;
+    target_addr.service = PING_SERVICE_ID;
+    target_addr.setIPv4();
+    target_addr.port = PING_SERVER_PORT;
+    target_addr.addrv4 = LOCALHOST_IP;
 
-    sockaddr_rxrpc my_addr;
-    my_addr.srx_family = AF_RXRPC;
-    my_addr.srx_service = 0; /* 0 indicates a client */
-    my_addr.transport_type = SOCK_DGRAM;
-    my_addr.transport_len = sockaddr_in.sizeof;
-    my_addr.transport.family = AF_INET;
-    my_addr.transport.sin.sin_port = 0;//htons(PING_CLIENT_PORT);
-    my_addr.transport.sin.sin_addr.s_addr = 0;
-    result = bind(send_socket, cast(sockaddr*)&my_addr, cast(uint)typeof(my_addr).sizeof);
-    if(result < 0)
-    {
-        writeln("bind failed");
-        writefln("Errno = %d", errno);
-        return;
-    }
-
-    sockaddr_rxrpc target_addr;
-    target_addr.srx_family = AF_RXRPC;
-    target_addr.srx_service = PING_SERVICE_ID;
-    target_addr.transport_type = SOCK_DGRAM;
-    target_addr.transport_len = sockaddr_in.sizeof;
-    target_addr.transport.family = AF_INET;
-    target_addr.transport.sin.sin_port = htons(PING_SERVER_PORT);
-    target_addr.transport.sin.sin_addr.s_addr = LOCALHOST_IP;
-
-    result = connect(send_socket, cast(sockaddr*)&target_addr, typeof(target_addr).sizeof);
-    if(result < 0 )
-    {
-        writeln("connect failed");
-        writefln("Errno = %d", errno);
-        return;
-    }
+    send_socket.connect(target_addr);
 
     {
         auto msg = MessageHeader!ulong();
@@ -121,7 +88,7 @@ void ping()
         msg.iovlen = 1;
         msg.flags = 0;
 
-        ssize_t success = sendmsg(send_socket, cast(msghdr*)&msg, 0);
+        ssize_t success = send_socket.send(msg);
         assert(success == msg_string.length);
     }
 
@@ -135,7 +102,7 @@ void ping()
         msg.iovlen = 1;
         msg.flags = 0;
 
-        ssize_t success = recvmsg(send_socket, cast(msghdr*)&msg, 0);
+        ssize_t success = send_socket.recv(msg);
         writeln("recvmsg = ", success, " ", errno);
         if (success > 0) {
             writeln("Got message from server: ",
@@ -171,19 +138,11 @@ struct RXRPCall {
     void function(RXRPCall *, long)    cb_err;
 };
 
-
-void setCallID(int idx, MessageHeader)(ref MessageHeader msg, ulong call_id)
-{
-    msg.ctrl!idx.level = SOL_RXRPC;
-    msg.ctrl!idx.type = RXRPC_USER_CALL_ID;
-    msg.ctrl!idx.data = call_id;
-}
-
 void pong(RXRPCall *c, ubyte[] arg) {
     writeln("PONG MESSAGE: ", c, ":", arg);
 
     auto msg = MessageHeader!ulong();
-    setCallID!0(msg, cast(ulong)c);
+    setCallID(msg, 0, cast(ulong)c);
 
     ubyte[] msg_string = cast(ubyte[])("PONG!  Thanks for using RX!");
     iovec msg_contents = { cast(void*)msg_string.ptr, msg_string.length };
@@ -219,7 +178,7 @@ void server()
     my_addr.transport.family = AF_INET;
     my_addr.transport.sin.sin_port = htons(PING_SERVER_PORT);
     my_addr.transport.sin.sin_addr.s_addr = 0;
-    bind(server_socket, cast(sockaddr*)&my_addr, cast(uint)typeof(my_addr).sizeof);
+    bind(server_socket, cast(std.c.linux.socket.sockaddr*)&my_addr, cast(uint)typeof(my_addr).sizeof);
 
     listen(server_socket, 100);
 

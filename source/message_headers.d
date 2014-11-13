@@ -189,6 +189,22 @@ struct MessageHeader(ControlMessageTypes...)
         }
         return this;
     }
+    this(this)
+    {
+        static if (ControlMessageTypes.length > 0)
+        {
+            // Really, I want to know whether I should use my default buffer,
+            // and this is the only comparison that should tell me that
+            if (hdr.msg_controllen == default_buffer_length)
+            {
+                hdr.msg_control = default_buffer.ptr;
+            }
+            else
+            {
+                hdr.msg_control = hdr.msg_control[0 .. hdr.msg_controllen].dup.ptr;
+            }
+        }
+    }
 
     ref ControlMessage!(ControlMessageTypes[idx]) ctrl(size_t idx)()
         if (idx < ControlMessageTypes.length)
@@ -199,6 +215,19 @@ struct MessageHeader(ControlMessageTypes...)
             cmsg = CMSG_NXTHDR(&hdr, cmsg);
         }
         return *(cast(ControlMessage!(ControlMessageTypes[idx])*)(cmsg));
+    }
+
+    ref ControlMessage!T ctrl(T)(size_t idx) pure @nogc @system
+    in {
+        assert(idx >= 0 && idx < ControlMessageTypes.length);
+    }
+    body {
+        cmsghdr * cmsg = CMSG_FIRSTHDR(&hdr);
+        foreach (i; 0 .. idx)
+        {
+            cmsg = CMSG_NXTHDR(&hdr, cmsg);
+        }
+        return *(cast(ControlMessage!T*)(cmsg));
     }
 }
 static assert(MessageHeader!().sizeof == msghdr.sizeof);
