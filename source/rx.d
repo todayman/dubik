@@ -35,12 +35,12 @@ struct sockaddr
         return addr.srx_service;
     }
 
-    void setIPv4() pure nothrow @nogc @safe
+    void setIPv4(in_port_t new_port = 0, in_addr_t new_address = 0) pure nothrow @nogc @safe
     {
         addr.transport_len = sockaddr_in.sizeof;
         addr.transport.family = AF_INET;
-        addr.transport.sin.sin_port = 0;
-        addr.transport.sin.sin_addr.s_addr = 0;
+        this.port = new_port;
+        this.addrv4 = new_address;
     }
 
     // port is in the same location and has the same type

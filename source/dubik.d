@@ -68,9 +68,7 @@ void ping()
 
     rx.sockaddr target_addr;
     target_addr.service = PING_SERVICE_ID;
-    target_addr.setIPv4();
-    target_addr.port = PING_SERVER_PORT;
-    target_addr.addrv4 = LOCALHOST_IP;
+    target_addr.setIPv4(PING_SERVER_PORT, LOCALHOST_IP);
 
     send_socket.connect(target_addr);
 
@@ -170,14 +168,9 @@ void server()
     int server_socket = socket(AF_RXRPC, SOCK_DGRAM, AF_INET);
     uint next_call_id = 1024;
 
-    sockaddr_rxrpc my_addr;
-    my_addr.srx_family = AF_RXRPC;
-    my_addr.srx_service = PING_SERVICE_ID; /* 0 indicates a client */
-    my_addr.transport_type = SOCK_DGRAM;
-    my_addr.transport_len = sockaddr_in.sizeof;
-    my_addr.transport.family = AF_INET;
-    my_addr.transport.sin.sin_port = htons(PING_SERVER_PORT);
-    my_addr.transport.sin.sin_addr.s_addr = 0;
+    rx.sockaddr my_addr;
+    my_addr.service = PING_SERVICE_ID;
+    my_addr.setIPv4(PING_SERVER_PORT, 0);
     bind(server_socket, cast(std.c.linux.socket.sockaddr*)&my_addr, cast(uint)typeof(my_addr).sizeof);
 
     listen(server_socket, 100);
@@ -203,8 +196,6 @@ void server()
         msg.namelen = msg_name.length;
         msg.iov.iov_len = msg_string.length;
         msg.resetControlLength();
-        /*msg.control = control.ptr;
-        msg.controllen = control.length;*/
 
         ssize_t success = recvmsg(server_socket, cast(msghdr*)&msg, 0);
         if( success == -1 )
