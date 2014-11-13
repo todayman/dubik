@@ -102,10 +102,7 @@ struct MessageHeader(ControlMessageTypes...)
 
     template AlignedSizeof(T)
     {
-        // CMSG_ALIGN is a Linux extension, but so is AF_RXRPC, so we'll use it
-        // CMSG_SPACE is from bits/socket.h and should be moved to druntime,
-        // where the other macros are
-        static size_t CMSG_SPACE(size_t len) { return CMSG_ALIGN(len) + CMSG_ALIGN(cmsghdr.sizeof); }
+        // CMSG_SPACE is a Linux extension, but so is AF_RXRPC, so we'll use it
         enum AlignedSizeof = CMSG_SPACE(CMSG_LEN(T.sizeof));
     }
 
