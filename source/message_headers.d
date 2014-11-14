@@ -268,7 +268,7 @@ struct DynamicControlMessage
     ref inout(ControlMessage!T) to(T)() inout
     in {
         // TODO should I drop the < and enforce ==?
-        assert(T.sizeof <= dataLength());
+        assert(T.sizeof == dataLength());
     }
     body {
         return *(cast(inout(ControlMessage!T*))&this);
