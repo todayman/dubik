@@ -229,6 +229,16 @@ struct MessageHeader(ControlMessageTypes...)
         }
         return *(cast(ControlMessage!T*)(cmsg));
     }
+
+    size_t totalMessageLength() const
+    {
+        if (hdr.msg_iov is null)
+            return 0;
+        size_t result = 0;
+        foreach (idx; 0 .. hdr.msg_iovlen)
+            result += hdr.msg_iov[idx].iov_len;
+        return result;
+    }
 }
 static assert(MessageHeader!().sizeof == msghdr.sizeof);
 
