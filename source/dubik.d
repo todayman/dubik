@@ -73,21 +73,13 @@ void ping()
     send_socket.connect(target_addr);
 
     {
-        auto msg = MessageHeader!ulong();
-        msg.ctrl!0.level = SOL_RXRPC;
-        msg.ctrl!0.type = RXRPC_USER_CALL_ID;
-        msg.ctrl!0.data = 1;
-
         string msg_string = "PING";
         iovec msg_contents = { cast(void*)msg_string.ptr, msg_string.length };
-        msg.name = &target_addr;
-        msg.namelen = sockaddr_rxrpc.sizeof;
-        msg.iov = &msg_contents;
-        msg.iovlen = 1;
-        msg.flags = 0;
 
-        ssize_t success = send_socket.send(msg);
-        assert(success == msg_string.length);
+        auto c = Call(send_socket, target_addr);
+        bool success = c.send([msg_contents]);
+
+        assert(success);
     }
 
     {

@@ -21,6 +21,8 @@ module rx;
 private import std.c.linux.rxrpc;
 private import std.c.linux.socket;
 
+private import message_headers;
+
 struct sockaddr
 {
     private sockaddr_rxrpc addr =
@@ -133,6 +135,62 @@ void setCallID(MessageHeader)(ref MessageHeader msg, size_t idx, ulong call_id)
     msg.ctrl!ulong(idx).data = call_id;
 }
 
+struct Call
+{
+    ClientSocket * sock;
+    MessageHeader!ulong msg;
+    bool inProgress = false;
+
+    this(ref ClientSocket sock, ref sockaddr target)
+    {
+        this.sock = &sock;
+        msg.ctrl!0.level = SOL_RXRPC;
+        msg.ctrl!0.type = RXRPC_USER_CALL_ID;
+        // Nwf has an email from dhowells that says this is true
+        // Something, something, "trust but verify", etc., etc.
+        static assert(typeof(&this).sizeof <= ulong.sizeof);
+        msg.ctrl!0.data = cast(ulong)&this;
+
+        msg.name = &target;
+        msg.namelen = sockaddr.sizeof;
+
+        msg.flags = 0;
+    }
+    ~this()
+    {
+        if (inProgress)
+        {
+            abort(0);
+        }
+    }
+    bool send(iovec[] iovs, bool end = true)
+    {
+        msg.iov = iovs.ptr;
+        msg.iovlen = iovs.length;
+        inProgress = true;
+        return sock.send(msg, end);
+    }
+
+    bool recv(iovec[] iovs, out bool end)
+    {
+       DynamicMessageHeader msg = DynamicMessageHeader(128);
+       msg.iov = iovs.ptr;
+       msg.iovlen = iovs.length;
+       // TODO finish implementing
+       assert(0);
+    }
+
+    void abort(int code)
+    {
+        MessageHeader!(ulong, int) abort_msg;
+        abort_msg!0 = msg.ctrl!0;
+        abort_msg.ctrl!1.level = SOL_RXRPC;
+        abort_msg.ctrl!1.type = RXPRC_ABORT;
+        abort_msg.ctrl!1.data = code;
+        sock.send(abort_msg);
+    }
+}
+
 struct ClientSocket
 {
     import std.conv : to;
@@ -169,10 +227,11 @@ struct ClientSocket
         }
     }
 
-    ssize_t send(MessageHeader)(in MessageHeader msg)
+    bool send(MessageHeader)(in MessageHeader msg, bool end = true)
     {
-        // TODO check connected
-        return sendmsg(sock, cast(msghdr*)&msg, 0);
+        // TODO check connected, but this will err and set errno if we're not connected
+        ssize_t success = sendmsg(sock, cast(msghdr*)&msg, 0);
+        return success == msg.totalMessageLength;
     }
 
     ssize_t recv(ref DynamicMessageHeader msg)
