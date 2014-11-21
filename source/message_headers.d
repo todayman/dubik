@@ -70,7 +70,11 @@ struct ControlMessage(T)
         hdr.cmsg_len = PayloadSize;
     }
 
-    static assert(ControlMessage!T.sizeof == CMSG_LEN(PayloadSize));
+    static if (CMSG_LEN(PayloadSize) != CMSG_SPACE(PayloadSize))
+    {
+        pragma(msg, "The length and space of a cmsg containing ", T, " are different, you might be unpleasantly surprised.");
+    }
+    static assert(ControlMessage!T.sizeof == CMSG_LEN(PayloadSize) || ControlMessage!T.sizeof == CMSG_SPACE(PayloadSize));
 }
 
 struct MessageHeader(ControlMessageTypes...)
