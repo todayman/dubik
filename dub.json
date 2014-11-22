@@ -6,6 +6,8 @@
     "homepage": "https://github.com/todayman/dubik",
 	"authors": ["Paul O'Neil"],
 	"dependencies": {
+        "vibe-d": ">=0.7.21"
 	},
-    "targetType": "executable"
+    "targetType": "executable",
+    "versions": ["VibeCustomMain"]
 }
