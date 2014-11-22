@@ -18,10 +18,10 @@
 
 module rx;
 
-private import std.c.linux.rxrpc;
-private import std.c.linux.socket;
+import std.c.linux.rxrpc;
+import std.c.linux.socket;
 
-private import message_headers;
+import message_headers;
 
 struct sockaddr
 {
