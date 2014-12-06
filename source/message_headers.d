@@ -18,7 +18,6 @@
 
 module message_headers;
 
-import std.typetuple;
 import std.c.linux.socket;
 
 struct ControlMessage(T)
@@ -323,7 +322,7 @@ struct DynamicMessageHeader
     {
         private msghdr* hdr;
 
-        public this(msghdr* h)
+        public this(inout(msghdr)* h) inout
         {
             hdr = h;
         }
@@ -366,9 +365,9 @@ struct DynamicMessageHeader
             return len;
         }
     }
-    auto ctrl_list()
+    inout(ControlListLooper) ctrl_list() inout
     {
-        return ControlListLooper(&hdr);
+        return inout(ControlListLooper)(&hdr);
     }
 
     ref DynamicControlMessage ctrl(size_t idx)
