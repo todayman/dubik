@@ -1,4 +1,4 @@
-dubik: Makefile source/dubik.d source/message_headers.d source/rx.d
+dubik: Makefile source/dubik.d source/message_headers.d source/vibe/core/drivers/rx.d
 	../dlang_rxrpc/dmd/src/dmd -color=on \
 		-I../dlang_rxrpc/phobos \
 		-I../dlang_rxrpc/druntime/import \
@@ -10,7 +10,7 @@ dubik: Makefile source/dubik.d source/message_headers.d source/rx.d
 		../dlang_rxrpc/druntime/lib/libdruntime-linux64.a \
 		source/dubik.d \
 		source/message_headers.d \
-		source/rx.d \
+		source/vibe/core/drivers/rx.d \
 		~/.dub/packages/vibe-d-0.7.21/source/vibe/appmain.d \
 		~/.dub/packages/vibe-d-0.7.21/source/vibe/core/*.d \
 		~/.dub/packages/vibe-d-0.7.21/source/vibe/core/drivers/*.d \

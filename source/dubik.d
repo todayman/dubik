@@ -27,7 +27,7 @@ import core.stdc.errno;
 import core.sys.posix.poll;
 
 import message_headers;
-import rx;
+import vibe.core.drivers.rx;
 
 int main(string[] args)
 {
@@ -64,9 +64,9 @@ static this()
 
 void ping()
 {
-    auto send_socket = new rx.ClientSocket(rx.SecurityLevel.Plain);
+    auto send_socket = new vibe.core.drivers.rx.ClientSocket(vibe.core.drivers.rx.SecurityLevel.Plain);
 
-    rx.sockaddr target_addr;
+    vibe.core.drivers.rx.sockaddr target_addr;
     target_addr.service = PING_SERVICE_ID;
     target_addr.setIPv4(PING_SERVER_PORT, LOCALHOST_IP);
 
@@ -157,7 +157,7 @@ void server()
     int server_socket = socket(AF_RXRPC, SOCK_DGRAM, AF_INET);
     uint next_call_id = 1024;
 
-    rx.sockaddr my_addr;
+    vibe.core.drivers.rx.sockaddr my_addr;
     my_addr.service = PING_SERVICE_ID;
     my_addr.setIPv4(PING_SERVER_PORT, 0);
     bind(server_socket, cast(std.c.linux.socket.sockaddr*)&my_addr, cast(uint)typeof(my_addr).sizeof);
