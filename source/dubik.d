@@ -64,35 +64,32 @@ static this()
 
 void ping()
 {
-    auto send_socket = rx.ClientSocket(rx.SecurityLevel.Plain);
+    auto send_socket = new rx.ClientSocket(rx.SecurityLevel.Plain);
 
     rx.sockaddr target_addr;
     target_addr.service = PING_SERVICE_ID;
     target_addr.setIPv4(PING_SERVER_PORT, LOCALHOST_IP);
 
-    send_socket.connect(target_addr);
-
+    auto c = send_socket.call(target_addr);
     {
         string msg_string = "PING";
         iovec msg_contents = { cast(void*)msg_string.ptr, msg_string.length };
 
-        auto c = Call(send_socket, target_addr);
         bool success = c.send([msg_contents]);
 
+        if (!success)
+        {
+            writeln("error ", errno);
+        }
         assert(success);
     }
 
     {
         ubyte[128] msg_string;
         iovec msg_contents = { cast(void*)msg_string.ptr, msg_string.length };
-        DynamicMessageHeader msg = DynamicMessageHeader(128);
-        msg.name = null;
-        msg.namelen = 0;
-        msg.iov = &msg_contents;
-        msg.iovlen = 1;
-        msg.flags = 0;
 
-        ssize_t success = send_socket.recv(msg);
+        bool finished;
+        ssize_t success = c.recv([msg_contents], finished);
         writeln("recvmsg = ", success, " ", errno);
         if (success > 0) {
             writeln("Got message from server: ",

@@ -18,8 +18,21 @@
 
 module rx;
 
+import core.stdc.errno;
+
 import std.c.linux.rxrpc;
 import std.c.linux.socket;
+
+import std.exception : enforce;
+import std.stdio;
+
+import deimos.event2.event;
+import deimos.event2.util : evutil_socket_t;
+
+import vibe.core.core : yield;
+import vibe.core.driver;// : DriverCore, getEventDriver;
+import vibe.core.drivers.libevent2;// : Libevent2Driver;
+import vibe.core.task : Task;
 
 import message_headers;
 
@@ -31,10 +44,20 @@ struct sockaddr
             { sin: {AF_INET, 0, {0}} }
     };
 
+    invariant {
+        // We don't support IPv6 yet
+        assert(addr.transport.family == AF_INET);
+    }
+
     // TODO Ask about what the byte ordering of service is...
     ref inout(ushort) service() inout pure nothrow @nogc
     {
         return addr.srx_service;
+    }
+
+    auto family() const pure nothrow @nogc
+    {
+        return addr.transport.family;
     }
 
     void setIPv4(in_port_t new_port = 0, in_addr_t new_address = 0) pure nothrow @nogc @safe
@@ -135,15 +158,17 @@ void setCallID(MessageHeader)(ref MessageHeader msg, size_t idx, ulong call_id)
     msg.ctrl!ulong(idx).data = call_id;
 }
 
-struct Call
+final class Call
 {
-    ClientSocket * sock;
+    ClientSocket sock;
     MessageHeader!ulong msg;
     bool inProgress = false;
+    Task owner;
 
-    this(ref ClientSocket sock, ref sockaddr target)
+    this(ClientSocket sock, ref sockaddr target)
     {
-        this.sock = &sock;
+        this.sock = sock;
+        msg = MessageHeader!ulong();
         msg.ctrl!0.level = SOL_RXRPC;
         msg.ctrl!0.type = RXRPC_USER_CALL_ID;
         // Nwf has an email from dhowells that says this is true
@@ -163,6 +188,7 @@ struct Call
             abort(0);
         }
     }
+
     bool send(iovec[] iovs, bool end = true)
     {
         msg.iov = iovs.ptr;
@@ -176,8 +202,7 @@ struct Call
        DynamicMessageHeader msg = DynamicMessageHeader(128);
        msg.iov = iovs.ptr;
        msg.iovlen = iovs.length;
-       // TODO finish implementing
-       assert(0);
+       return sock.recv(this, msg) > 0;
     }
 
     void abort(int code)
@@ -191,19 +216,33 @@ struct Call
     }
 }
 
-struct ClientSocket
+// Modeled after vibe.core.drivers.libevent2.UDPConnection
+final class ClientSocket
 {
     import std.conv : to;
     import core.stdc.errno : errno;
     import message_headers : DynamicMessageHeader;
 
-    int sock;
+    private {
+        DriverCore core;
+        Libevent2Driver driver;
+        event_base* event_loop;
+        event* recv_event;
+        int sock;
+        uint recvs_in_progress;
+    }
 
     this(SecurityLevel security_level)
     {
+        this.driver = cast(Libevent2Driver)getEventDriver();
+        // Only compatible with the libevent2 driver
+        assert(this.driver);
+        this.core = getThreadLibeventDriverCore();
+        event_loop = driver.eventLoop;
         sockaddr addr; // sockaddr.init has the right values for a client
 
         sock = socket(AF_RXRPC, SOCK_DGRAM, addr.addr.transport.family);
+        enforce(evutil_make_socket_nonblocking(sock) == 0);
 
         int result = setsockopt(sock, SOL_RXRPC, RXRPC_MIN_SECURITY_LEVEL, &security_level, typeof(security_level).sizeof);
         if (result < 0)
@@ -216,6 +255,8 @@ struct ClientSocket
         {
             throw new Exception("bind failed with errno = " ~ to!string(errno));
         }
+
+        recv_event = event_new(event_loop, sock, EV_READ | EV_PERSIST, &onRecv, cast(void*)&this);
     }
 
     void connect(in sockaddr addr)
@@ -227,16 +268,92 @@ struct ClientSocket
         }
     }
 
-    bool send(MessageHeader)(in MessageHeader msg, bool end = true)
+    ~this()
+    {
+        event_free(recv_event);
+    }
+
+    Call call(ref sockaddr addr)
+    {
+        return new Call(this, addr);
+    }
+
+    package bool send(MessageHeader)(in MessageHeader msg, bool end = true)
     {
         // TODO check connected, but this will err and set errno if we're not connected
         ssize_t success = sendmsg(sock, cast(msghdr*)&msg, 0);
         return success == msg.totalMessageLength;
     }
 
-    ssize_t recv(ref DynamicMessageHeader msg)
+    package ssize_t recv(Call c, ref DynamicMessageHeader msg)
     {
-        // TODO check connected
-        return recvmsg(sock, cast(msghdr*)&msg, 0);
+        if (recvs_in_progress == 0)
+        {
+            event_add(recv_event, null);
+        }
+        recvs_in_progress += 1;
+
+        scope(exit)
+        {
+            recvs_in_progress -= 1;
+
+            if (recvs_in_progress == 0)
+            {
+                enforce(event_del(recv_event) == 0);
+            }
+        }
+
+        c.owner = Task.getThis();
+
+        while (true)
+        {
+            // Yielding here means that we wait for the socket to decide that
+            // this fiber needs to run again It will do that *only* when there
+            // is a message *for this call*.
+
+            yield();
+            core.yieldForEvent();
+            ssize_t result = recvmsg(sock, cast(msghdr*)&msg, 0);
+            if (result > 0)
+            {
+                return result;
+            }
+            else if (result < 0)
+            {
+                if (errno != EWOULDBLOCK)
+                {
+                    throw new Exception("Failure in recv");
+                }
+            }
+        }
+    }
+
+    private static ulong getCallID(in DynamicMessageHeader hdr)
+    {
+        foreach (ref ctrl_msg; hdr.ctrl_list)
+        {
+            if (ctrl_msg.level != SOL_RXRPC || ctrl_msg.type != RXRPC_USER_CALL_ID)
+            {
+                continue;
+            }
+
+            return ctrl_msg.to!ulong.data;
+        }
+        assert(0);
+    }
+
+    private static extern(C) void onRecv(evutil_socket_t sock, short what, void* ctx) @system
+    {
+        ClientSocket* sock_obj = cast(ClientSocket*) ctx;
+
+        auto hdr = DynamicMessageHeader(128);
+        hdr.iov = null;
+        hdr.iovlen = 0;
+        recvmsg(sock, cast(msghdr*)&hdr, MSG_PEEK);
+
+        Call * call = cast(Call*)getCallID(hdr);
+        // Now, the hdr says which call this is associated with in the control
+        // messages, so resume that task
+        call.sock.core.resumeTask(call.owner);
     }
 }
