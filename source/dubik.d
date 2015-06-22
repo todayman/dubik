@@ -98,6 +98,7 @@ void ping()
         if (success > 0) {
             writeln("Got message from server: ",
                 cast(string)(msg_string[0 .. success]));
+            writeln("Finished = ", finished);
         }
     }
 

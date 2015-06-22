@@ -199,12 +199,16 @@ final class Call
 
     ssize_t recv(iovec[] iovs, out bool end)
     {
-       UntypedMessageHeader msg = UntypedMessageHeader(128);
-       msg.iov = iovs.ptr;
-       msg.iovlen = iovs.length;
-       auto result = sock.recv(this, msg);
-       inProgress = false; // This may not be true all the time, e.g multiple recvs to get all the data from a call
-       return result;
+        UntypedMessageHeader msg = UntypedMessageHeader(128);
+        msg.iov = iovs.ptr;
+        msg.iovlen = iovs.length;
+        auto result = sock.recv(this, msg);
+        end = (msg.flags() & MSG_EOR) != 0;
+        if (end)
+        {
+             inProgress = false;
+        }
+        return result;
     }
 
     void abort(int code)
