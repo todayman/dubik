@@ -34,7 +34,7 @@ int main(string[] args)
 {
     if( args.length != 2 )
     {
-        writeln("Exactly one argument expected.");
+        writeln("Exactly one argument expected, either \"--ping\" or \"--pong\".");
         return 1;
     }
 
@@ -49,6 +49,7 @@ int main(string[] args)
     else
     {
         writeln("Expected argument to be either \"--ping\" or \"--pong\".");
+        return 1;
     }
 
     runEventLoop();
