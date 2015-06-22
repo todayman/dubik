@@ -20,6 +20,7 @@ module message_headers;
 
 import std.c.linux.socket;
 
+// TODO probably needs postblit
 struct ControlMessage(T)
 {
     static if (!is(T : void))
@@ -31,7 +32,8 @@ struct ControlMessage(T)
         private enum PayloadSize = 0;
     }
     union {
-        cmsghdr hdr = {PayloadSize, 0, 0};
+        // TODO verify the CMSG_LEN is correct...
+        cmsghdr hdr = {CMSG_LEN(PayloadSize), 0, 0};
         // _data is here to ensure that the struct is the right size for
         // the payload it contains
         ubyte[CMSG_LEN(PayloadSize)] _data;
@@ -152,6 +154,7 @@ struct MessageHeader(ControlMessageTypes...)
                 }
             }
 
+            // FIXME the man page (man 3 cmsg) says that this is not right
             result.hdr.msg_controllen = (cast(ubyte*)&result.ctrl!(ControlMessageTypes.length - 1)()) + CMSG_LEN(ControlMessageTypes[$-1].sizeof) - result.hdr.msg_control;
         }
 
@@ -245,7 +248,7 @@ struct MessageHeader(ControlMessageTypes...)
 }
 static assert(MessageHeader!().sizeof == msghdr.sizeof);
 
-struct DynamicControlMessage
+struct UntypedControlMessage
 {
     cmsghdr hdr;
 
@@ -278,7 +281,7 @@ struct DynamicControlMessage
     }
 }
 
-struct DynamicMessageHeader
+struct UntypedMessageHeader
 {
     import std.algorithm : map, sum;
 
@@ -328,18 +331,18 @@ struct DynamicMessageHeader
         }
 
         // TODO change these to inout
-        int opApply(int delegate(ref const DynamicControlMessage) dg) const
+        int opApply(int delegate(ref const UntypedControlMessage) dg) const
         {
             int result = 0;
             for (const(cmsghdr)* cmsg = CMSG_FIRSTHDR(hdr);
                  cmsg !is null && !result;
                  cmsg = CMSG_NXTHDR(hdr, cmsg))
             {
-                result = dg(*cast(DynamicControlMessage*)cmsg);
+                result = dg(*cast(UntypedControlMessage*)cmsg);
             }
             return result;
         }
-        int opApply(int delegate(ref ulong, ref const DynamicControlMessage) dg) const
+        int opApply(int delegate(ref ulong, ref const UntypedControlMessage) dg) const
         {
             int result = 0;
             const(cmsghdr)* cmsg = CMSG_FIRSTHDR(hdr);
@@ -347,7 +350,7 @@ struct DynamicMessageHeader
                  cmsg !is null && !result;
                  ++idx)
             {
-                result = dg(idx, *cast(const(DynamicControlMessage)*)cmsg);
+                result = dg(idx, *cast(const(UntypedControlMessage)*)cmsg);
                 cmsg = CMSG_NXTHDR(hdr, cmsg);
             }
             return result;
@@ -370,7 +373,7 @@ struct DynamicMessageHeader
         return inout(ControlListLooper)(&hdr);
     }
 
-    ref DynamicControlMessage ctrl(size_t idx)
+    ref UntypedControlMessage ctrl(size_t idx)
     {
         cmsghdr * cmsg = CMSG_FIRSTHDR(&hdr);
         for (size_t i = 0; i < idx && cmsg !is null; ++i)
@@ -379,7 +382,7 @@ struct DynamicMessageHeader
         }
         if (cmsg is null)
             throw new Exception("Out of bounds!");
-        return *(cast(DynamicControlMessage*)(cmsg));
+        return *(cast(UntypedControlMessage*)(cmsg));
     }
 
     void resetControlLength()

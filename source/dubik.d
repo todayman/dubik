@@ -173,7 +173,7 @@ void server()
     iovec msg_contents = { cast(void*)msg_string.ptr, msg_string.length };
 
     ubyte[1024] msg_name;
-    DynamicMessageHeader msg = DynamicMessageHeader(128);
+    UntypedMessageHeader msg = UntypedMessageHeader(128);
 
     msg.iovlen = 1;
     msg.iov = &msg_contents;
@@ -204,7 +204,7 @@ void server()
         Nullable!ulong this_call;
         Nullable!long this_abort;
         bool this_finack;
-        foreach (ref const DynamicControlMessage ctrl_msg ; msg.ctrl_list)
+        foreach (ref const UntypedControlMessage ctrl_msg ; msg.ctrl_list)
         {
             writefln("CTRL MSG: %d %d %d",
                 ctrl_msg.level,
