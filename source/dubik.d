@@ -27,6 +27,7 @@ import core.stdc.errno;
 import core.sys.posix.poll;
 
 import message_headers;
+import vibe.core.core;
 import vibe.core.drivers.rx;
 
 int main(string[] args)
@@ -39,16 +40,18 @@ int main(string[] args)
 
     if( args[1] == "--ping" )
     {
-        ping();
+        runTask(() => ping());
     }
     else if( args[1] == "--pong" )
     {
-        server();
+        runTask(() => server());
     }
     else
     {
         writeln("Expected argument to be either \"--ping\" or \"--pong\".");
     }
+
+    runEventLoop();
 
     return 0;
 }
@@ -96,6 +99,8 @@ void ping()
                 cast(string)(msg_string[0 .. success]));
         }
     }
+
+    exitEventLoop();
 }
 
 // XXX To a library with thee!
@@ -262,4 +267,5 @@ void server()
     }
 
     writeln("Poll finished");
+    exitEventLoop();
 }
