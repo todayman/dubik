@@ -197,12 +197,14 @@ final class Call
         return sock.send(msg, end);
     }
 
-    bool recv(iovec[] iovs, out bool end)
+    ssize_t recv(iovec[] iovs, out bool end)
     {
        UntypedMessageHeader msg = UntypedMessageHeader(128);
        msg.iov = iovs.ptr;
        msg.iovlen = iovs.length;
-       return sock.recv(this, msg) > 0;
+       auto result = sock.recv(this, msg);
+       inProgress = false; // This may not be true all the time, e.g multiple recvs to get all the data from a call
+       return result;
     }
 
     void abort(int code)
