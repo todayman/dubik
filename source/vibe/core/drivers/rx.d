@@ -272,7 +272,12 @@ final class ClientSocket
 
     ~this()
     {
-        event_free(recv_event);
+        /*
+           Figure out if this is necessary after event_del()
+        if (recvs_in_progress > 0)
+        {
+            event_free(recv_event);
+        }*/
     }
 
     Call call(ref sockaddr addr)
