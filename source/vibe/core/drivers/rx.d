@@ -318,7 +318,6 @@ final class ClientSocket
             // this fiber needs to run again It will do that *only* when there
             // is a message *for this call*.
 
-            yield();
             core.yieldForEvent();
             ssize_t result = recvmsg(sock, cast(msghdr*)&msg, 0);
             if (result > 0)
