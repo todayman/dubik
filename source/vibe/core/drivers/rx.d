@@ -173,8 +173,8 @@ final class Call
         msg.ctrl!0.type = RXRPC_USER_CALL_ID;
         // Nwf has an email from dhowells that says this is true
         // Something, something, "trust but verify", etc., etc.
-        static assert(typeof(&this).sizeof <= ulong.sizeof);
-        msg.ctrl!0.data = cast(ulong)&this;
+        static assert((void*).sizeof <= ulong.sizeof);
+        msg.ctrl!0.data = cast(ulong)cast(void*)this;
 
         msg.name = &target;
         msg.namelen = sockaddr.sizeof;
@@ -256,7 +256,7 @@ final class ClientSocket
             throw new Exception("bind failed with errno = " ~ to!string(errno));
         }
 
-        recv_event = event_new(event_loop, sock, EV_READ | EV_PERSIST, &onRecv, cast(void*)&this);
+        recv_event = event_new(event_loop, sock, EV_READ | EV_PERSIST, &onRecv, cast(void*)this);
     }
 
     void connect(in sockaddr addr)
@@ -351,7 +351,7 @@ final class ClientSocket
         hdr.iovlen = 0;
         recvmsg(sock, cast(msghdr*)&hdr, MSG_PEEK);
 
-        Call * call = cast(Call*)getCallID(hdr);
+        Call call = cast(Call)cast(void*)getCallID(hdr);
         // Now, the hdr says which call this is associated with in the control
         // messages, so resume that task
         call.sock.core.resumeTask(call.owner);
