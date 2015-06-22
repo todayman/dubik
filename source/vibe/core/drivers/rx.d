@@ -199,7 +199,7 @@ final class Call
 
     bool recv(iovec[] iovs, out bool end)
     {
-       DynamicMessageHeader msg = DynamicMessageHeader(128);
+       UntypedMessageHeader msg = UntypedMessageHeader(128);
        msg.iov = iovs.ptr;
        msg.iovlen = iovs.length;
        return sock.recv(this, msg) > 0;
@@ -221,7 +221,7 @@ final class ClientSocket
 {
     import std.conv : to;
     import core.stdc.errno : errno;
-    import message_headers : DynamicMessageHeader;
+    import message_headers : UntypedMessageHeader;
 
     private {
         DriverCore core;
@@ -285,7 +285,7 @@ final class ClientSocket
         return success == msg.totalMessageLength;
     }
 
-    package ssize_t recv(Call c, ref DynamicMessageHeader msg)
+    package ssize_t recv(Call c, ref UntypedMessageHeader msg)
     {
         if (recvs_in_progress == 0)
         {
@@ -322,13 +322,13 @@ final class ClientSocket
             {
                 if (errno != EWOULDBLOCK)
                 {
-                    throw new Exception("Failure in recv");
+                    throw new Exception("Failure in recv: " ~ to!string(errno));
                 }
             }
         }
     }
 
-    private static ulong getCallID(in DynamicMessageHeader hdr)
+    private static ulong getCallID(in UntypedMessageHeader hdr)
     {
         foreach (ref ctrl_msg; hdr.ctrl_list)
         {
@@ -346,7 +346,7 @@ final class ClientSocket
     {
         ClientSocket* sock_obj = cast(ClientSocket*) ctx;
 
-        auto hdr = DynamicMessageHeader(128);
+        auto hdr = UntypedMessageHeader(128);
         hdr.iov = null;
         hdr.iovlen = 0;
         recvmsg(sock, cast(msghdr*)&hdr, MSG_PEEK);
