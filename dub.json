@@ -1,13 +1,18 @@
 {
 	"name": "dubik",
 	"description": "An implementation of the UBIK replication protocol",
-	"copyright": "Copyright © 2014, Paul O'Neil",
+	"copyright": "Copyright © 2014-2015, Paul O'Neil",
     "license": "AGPL-3.0",
     "homepage": "https://github.com/todayman/dubik",
 	"authors": ["Paul O'Neil"],
 	"dependencies": {
-        "vibe-d": ">=0.7.21"
+        "vibe-d": "~>0.7.21"
 	},
     "targetType": "executable",
-    "versions": ["VibeCustomMain"]
+    "versions": [
+        "VibeCustomMain"
+    ],
+    "subConfigurations": {
+        "vibe-d": "libevent"
+    }
 }
