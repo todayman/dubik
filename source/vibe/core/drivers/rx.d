@@ -1,6 +1,6 @@
 /*
  *  Dubik - A D language implementation of the UBIK protocol
- *  Copyright (C) 2014 Paul O'Neil
+ *  Copyright (C) 2014-2015 Paul O'Neil
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU Affero General Public License as
@@ -18,13 +18,17 @@
 
 module vibe.core.drivers.rx;
 
+import core.memory : GC;
 import core.stdc.errno;
 
 import std.c.linux.rxrpc;
 import std.c.linux.socket;
 
+import std.conv : to;
 import std.exception : enforce;
+import std.experimental.logger;
 import std.stdio;
+import std.typecons : Nullable;
 
 import deimos.event2.event;
 import deimos.event2.util : evutil_socket_t;
@@ -158,7 +162,7 @@ void setCallID(MessageHeader)(ref MessageHeader msg, size_t idx, ulong call_id)
     msg.ctrl!ulong(idx).data = call_id;
 }
 
-final class Call
+final class ClientCall
 {
     ClientSocket sock;
     MessageHeader!ulong msg;
@@ -220,6 +224,20 @@ final class Call
         abort_msg.ctrl!1.data = code;
         sock.send(abort_msg);
     }
+}
+
+private ulong getCallID(in UntypedMessageHeader hdr)
+{
+    foreach (ref ctrl_msg; hdr.ctrl_list)
+    {
+        if (ctrl_msg.level != SOL_RXRPC || ctrl_msg.type != RXRPC_USER_CALL_ID)
+        {
+            continue;
+        }
+
+        return ctrl_msg.to!ulong.data;
+    }
+    assert(0);
 }
 
 // Modeled after vibe.core.drivers.libevent2.UDPConnection
@@ -284,9 +302,9 @@ final class ClientSocket
         }*/
     }
 
-    Call call(ref sockaddr addr)
+    ClientCall call(ref sockaddr addr)
     {
-        return new Call(this, addr);
+        return new ClientCall(this, addr);
     }
 
     package bool send(MessageHeader)(in MessageHeader msg, bool end = true)
@@ -296,7 +314,310 @@ final class ClientSocket
         return success == msg.totalMessageLength;
     }
 
-    package ssize_t recv(Call c, ref UntypedMessageHeader msg)
+    package ssize_t recv(ClientCall c, ref UntypedMessageHeader msg)
+    {
+        if (recvs_in_progress == 0)
+        {
+            event_add(recv_event, null);
+        }
+        recvs_in_progress += 1;
+
+        scope(exit)
+        {
+            recvs_in_progress -= 1;
+
+            if (recvs_in_progress == 0)
+            {
+                enforce(event_del(recv_event) == 0);
+            }
+        }
+
+        c.owner = Task.getThis();
+
+        while (true)
+        {
+            // Yielding here means that we wait for the socket to decide that
+            // this fiber needs to run again It will do that *only* when there
+            // is a message *for this call*.
+
+            core.yieldForEvent();
+            ssize_t result = recvmsg(sock, cast(msghdr*)&msg, 0);
+            if (result > 0)
+            {
+                return result;
+            }
+            else if (result < 0)
+            {
+                if (errno != EWOULDBLOCK)
+                {
+                    throw new Exception("Failure in recv: " ~ to!string(errno));
+                }
+            }
+        }
+    }
+
+    private static extern(C) void onRecv(evutil_socket_t sock, short what, void* ctx) @system
+    {
+        ClientSocket* sock_obj = cast(ClientSocket*) ctx;
+
+        auto hdr = UntypedMessageHeader(128);
+        hdr.iov = null;
+        hdr.iovlen = 0;
+        recvmsg(sock, cast(msghdr*)&hdr, MSG_PEEK);
+
+        ClientCall call = cast(ClientCall)cast(void*)getCallID(hdr);
+        // Now, the hdr says which call this is associated with in the control
+        // messages, so resume that task
+        call.sock.core.resumeTask(call.owner);
+    }
+}
+
+class ServerCall
+{
+    private ServerSocket sock;
+
+    private UntypedMessageHeader[] mesagebuffer;
+    private bool awaitingData;
+
+    private Exception exc;
+
+    private bool finalAck;
+    private bool awaitingAck;
+
+    Task owner;
+
+    this(ServerSocket s)
+    {
+        sock = s;
+        awaitingData = false;
+
+        finalAck = false;
+        awaitingAck = false;
+
+        exc = null;
+    }
+}
+
+class AbortException : Exception
+{
+    public long code;
+    public this(long c)
+    {
+        super("RX RPC aborted with code " ~ to!string(c) ~ ".");
+        code = c;
+    }
+}
+
+// Modeled after vibe.core.drivers.libevent2.TCPConnection
+final class ServerSocket
+{
+    import core.stdc.errno : errno;
+    import message_headers : UntypedMessageHeader;
+
+    public alias CallResponse = void delegate(ServerCall);
+    private {
+        DriverCore core;
+        Libevent2Driver driver;
+        event_base* event_loop;
+        event* recv_event;
+        int sock;
+        uint recvs_in_progress;
+    }
+
+    private this()
+    {
+        this.driver = cast(Libevent2Driver)getEventDriver();
+        // Only compatible with the libevent2 driver
+        assert(this.driver);
+        this.core = getThreadLibeventDriverCore();
+        event_loop = driver.eventLoop;
+    }
+
+    void listen(in sockaddr addr, SecurityLevel security_level)
+    {
+        sock = socket(AF_RXRPC, SOCK_DGRAM, addr.addr.transport.family);
+        enforce(evutil_make_socket_nonblocking(sock) == 0);
+
+        int result = setsockopt(sock, SOL_RXRPC, RXRPC_MIN_SECURITY_LEVEL, &security_level, typeof(security_level).sizeof);
+        if (result < 0)
+        {
+            throw new Exception("setsockopt failed with errno = " ~ to!string(errno));
+        }
+
+        // TODO check return code
+        bind(sock, cast(std.c.linux.socket.sockaddr*)&addr, cast(uint)typeof(addr).sizeof);
+
+        .listen(sock, 100);
+
+        // TODO look at the socket options that vibe.d sets on this in the TCP listener
+        // TODO allow incoming calls to go to multiple threads if the right options are set
+
+        auto evloop = getThreadLibeventEventLoop();
+        event_new(evloop, sock, EV_READ | EV_PERSIST, &onRecv, cast(void*)this);
+    }
+
+    extern(C) static void onRecv(evutil_socket_t sock, short evtype, void* arg)
+    {
+        ServerSocket socket_object = cast(ServerSocket)arg;
+        auto hdr = UntypedMessageHeader(128);
+        hdr.iov = null;
+        hdr.iovlen = 0;
+        ssize_t success = .recvmsg(sock, cast(msghdr*)&hdr, MSG_PEEK);
+        if (success < 0)
+        {
+            error("Peek Receive failed!");
+            error("Errno = %d", errno);
+            return; // TODO this is probably incorrect, since there are tasks
+                    // running and an event loop and things.
+        }
+
+        ServerCall call = cast(ServerCall)cast(void*)getCallID(hdr);
+
+        trace("Success = ", success, " ", hdr.controllen);
+
+        trace("CTRL MSGS = %d", hdr.ctrl_list.length);
+        Nullable!ulong this_call;
+        Nullable!long this_abort;
+        bool this_finack;
+        foreach (ref const UntypedControlMessage ctrl_msg ; hdr.ctrl_list)
+        {
+            trace("CTRL MSG: %d %d %d",
+                ctrl_msg.level,
+                ctrl_msg.type,
+                ctrl_msg.totalLength());
+            // We only care about RXRPC control messages
+            if(ctrl_msg.level != SOL_RXRPC) { continue; }
+
+            switch(ctrl_msg.type) {
+                case RXRPC_NEW_CALL:
+                    socket_object.createAndAcceptCall();
+                    break;
+                case RXRPC_USER_CALL_ID:
+                    this_call = ctrl_msg.to!ulong().data;
+                    break;
+                case RXRPC_ACK:
+                    this_finack = true;
+                    break;
+                case RXRPC_ABORT:
+                    info("Get the abort code.");
+                    this_abort = ctrl_msg.to!long.data;
+                    break;
+                default:
+                    warning("  Unknown control message");
+                    break;
+            }
+        }
+        trace("Done with control messages.");
+
+        if(!this_call.isNull) {
+            ServerCall c = cast(ServerCall)cast(void*)(this_call.get());
+            if(success > 0) {
+                socket_object.deliverData(c, success);
+            }
+            if(this_finack) {
+                socket_object.finalAck(c);
+            }
+            if(!this_abort.isNull) {
+                socket_object.abortCall(c, this_abort.get());
+            }
+            // XXX Yes?  Maybe?  Is this really when the kernel drops the ID?
+            if(!this_abort.isNull || this_finack) {
+              writeln("Enabling GC on ", cast(void *)c);
+              GC.removeRoot(cast(void*)c);
+            }
+        }
+    }
+
+    ServerCall createCall()
+    {
+        // Create the metadata for this call
+        auto c = new ServerCall(this);
+        tracef("new call c = ", cast(void*)c);
+
+        GC.addRoot(cast(void*)c);
+        GC.setAttr(cast(void*)c, GC.BlkAttr.NO_MOVE);
+
+        return c;
+    }
+
+    void acceptCall(ServerCall c)
+    {
+        // And tell the kernel to accept the call
+        auto msg = MessageHeader!(void, ulong)();
+
+        {
+            msg.ctrl!0.level = SOL_RXRPC;
+            msg.ctrl!0.type = RXRPC_ACCEPT;
+        }
+        ulong id = cast(ulong)cast(void*)c;
+        msg.setCallID!1(id);
+
+        msg.name = null;
+        msg.namelen = 0;
+        msg.iov = null;
+        msg.iovlen = 0;
+        msg.flags = 0;
+
+        ssize_t success = sendmsg(sock, cast(msghdr*)&msg, 0);
+        trace("RXRPC ACCEPT sendmsg = %d %d", success, errno);
+    }
+
+    void createAndAcceptCall()
+    {
+        ServerCall call = createCall();
+        acceptCall(call);
+    }
+
+    void deliverData(ServerCall call, long payload_length)
+    {
+        // TODO what if call is awaiting data and there is data in the buffer?
+        // is that a real scenario?
+        if (call.awaitingData)
+        {
+            call.sock.core.resumeTask(call.owner);
+        }
+        else
+        {
+            UntypedMessageHeader hdr = UntypedMessageHeader(128);
+            ubyte[] buffer = new ubyte[payload_length];
+            iovec[] iovs = new iovec[1];
+            iovs[0].iov_base = cast(void*)buffer.ptr;
+            iovs[0].iov_len = buffer.length;
+            hdr.iov = iovs.ptr;
+            hdr.iovlen = iovs.length;
+
+            .recvmsg(sock, cast(msghdr*)&hdr, 0);
+
+            // TODO Fix postblit on UntypedMessageHeader
+            call.mesagebuffer ~= [hdr];
+        }
+    }
+
+    void finalAck(ServerCall call)
+    {
+        trace("Dispatch finalack...");
+        if (call.awaitingAck)
+        {
+            call.sock.core.resumeTask(call.owner);
+        }
+        else
+        {
+            call.finalAck = true;
+        }
+    }
+
+    void abortCall(ServerCall call, long error_code)
+    {
+        trace("Dispatch abort...");
+        auto exc = new AbortException(error_code);
+        call.exc = exc;
+        if (call.awaitingAck || call.awaitingData)
+        {
+            core.resumeTask(call.owner);
+        }
+    }
+
+    /*package ssize_t recv(Call c, ref UntypedMessageHeader msg)
     {
         if (recvs_in_progress == 0)
         {
@@ -365,5 +686,5 @@ final class ClientSocket
         // Now, the hdr says which call this is associated with in the control
         // messages, so resume that task
         call.sock.core.resumeTask(call.owner);
-    }
+    }*/
 }
