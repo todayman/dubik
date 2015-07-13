@@ -206,7 +206,7 @@ final class ClientCall
         UntypedMessageHeader msg = UntypedMessageHeader(128);
         msg.iov = iovs.ptr;
         msg.iovlen = iovs.length;
-        auto result = sock.recv(this, msg);
+        ssize_t result = sock.recv(this, msg);
         end = (msg.flags() & MSG_EOR) != 0;
         if (end)
         {
@@ -376,12 +376,9 @@ class ServerCall
 {
     private ServerSocket sock;
 
-    private UntypedMessageHeader[] mesagebuffer;
+    private UntypedMessageHeader[] messagebuffer;
+
     private bool awaitingData;
-
-    private Exception exc;
-
-    private bool finalAck;
     private bool awaitingAck;
 
     Task owner;
@@ -391,10 +388,42 @@ class ServerCall
         sock = s;
         awaitingData = false;
 
-        finalAck = false;
         awaitingAck = false;
+    }
 
-        exc = null;
+    void recvEntireMessage(iovec[] iovs, out UntypedMessageHeader msg, out ssize_t result)
+    {
+        msg = UntypedMessageHeader(128);
+        msg.iov = iovs.ptr;
+        msg.iovlen = iovs.length;
+        result  = sock.recv(this, msg);
+    }
+
+    ssize_t recv(iovec[] iovs, out bool end)
+    {
+        UntypedMessageHeader msg;
+        ssize_t result;
+
+        recvEntireMessage(iovs, msg, result);
+
+        end = (msg.flags() & MSG_EOR) != 0;
+        if (end)
+        {
+            // inProgress = false;
+        }
+        return result;
+    }
+
+    void send()
+    {
+    }
+
+    void awaitFinalAck()
+    {
+        UntypedMessageHeader msg;
+        ssize_t result;
+
+        recvEntireMessage([], msg, result);
     }
 }
 
@@ -515,10 +544,10 @@ final class ServerSocket
                 socket_object.deliverData(c, success);
             }
             if(this_finack) {
-                socket_object.finalAck(c);
+                socket_object.finalAck(c, success);
             }
             if(!this_abort.isNull) {
-                socket_object.abortCall(c, this_abort.get());
+                socket_object.abortCall(c, success);
             }
             // XXX Yes?  Maybe?  Is this really when the kernel drops the ID?
             if(!this_abort.isNull || this_finack) {
@@ -578,22 +607,29 @@ final class ServerSocket
         }
         else
         {
-            UntypedMessageHeader hdr = UntypedMessageHeader(128);
-            ubyte[] buffer = new ubyte[payload_length];
-            iovec[] iovs = new iovec[1];
-            iovs[0].iov_base = cast(void*)buffer.ptr;
-            iovs[0].iov_len = buffer.length;
-            hdr.iov = iovs.ptr;
-            hdr.iovlen = iovs.length;
-
-            .recvmsg(sock, cast(msghdr*)&hdr, 0);
+            UntypedMessageHeader hdr = recvMessage(payload_length);
 
             // TODO Fix postblit on UntypedMessageHeader
-            call.mesagebuffer ~= [hdr];
+            call.messagebuffer ~= [hdr];
         }
     }
 
-    void finalAck(ServerCall call)
+    UntypedMessageHeader recvMessage(long payload_length)
+    {
+        UntypedMessageHeader hdr = UntypedMessageHeader(128);
+        ubyte[] buffer = new ubyte[payload_length];
+        iovec[] iovs = new iovec[1];
+        iovs[0].iov_base = cast(void*)buffer.ptr;
+        iovs[0].iov_len = buffer.length;
+        hdr.iov = iovs.ptr;
+        hdr.iovlen = iovs.length;
+
+        .recvmsg(sock, cast(msghdr*)&hdr, 0);
+
+        return hdr;
+    }
+
+    void finalAck(ServerCall call, long payload_length)
     {
         trace("Dispatch finalack...");
         if (call.awaitingAck)
@@ -602,22 +638,26 @@ final class ServerSocket
         }
         else
         {
-            call.finalAck = true;
+            UntypedMessageHeader hdr = recvMessage(payload_length);
+            call.messagebuffer ~= [hdr];
         }
     }
 
-    void abortCall(ServerCall call, long error_code)
+    void abortCall(ServerCall call, long payload_length)
     {
         trace("Dispatch abort...");
-        auto exc = new AbortException(error_code);
-        call.exc = exc;
         if (call.awaitingAck || call.awaitingData)
         {
             core.resumeTask(call.owner);
         }
+        else
+        {
+            UntypedMessageHeader hdr = recvMessage(payload_length);
+            call.messagebuffer ~= [hdr];
+        }
     }
 
-    /*package ssize_t recv(Call c, ref UntypedMessageHeader msg)
+    package ssize_t recv(ServerCall c, ref UntypedMessageHeader msg)
     {
         if (recvs_in_progress == 0)
         {
@@ -659,7 +699,7 @@ final class ServerSocket
         }
     }
 
-    private static ulong getCallID(in UntypedMessageHeader hdr)
+    /*private static ulong getCallID(in UntypedMessageHeader hdr)
     {
         foreach (ref ctrl_msg; hdr.ctrl_list)
         {
