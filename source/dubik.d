@@ -138,7 +138,7 @@ void pong(RXRPCall *c, ubyte[] arg) {
     auto msg = MessageHeader!ulong();
     setCallID(msg, 0, cast(ulong)c);
 
-    ubyte[] msg_string = cast(ubyte[])("PONG!  Thanks for using RX!");
+    ubyte[] msg_string = cast(ubyte[])("PONG!  Thanks for using RX!".dup);
     iovec msg_contents = { cast(void*)msg_string.ptr, msg_string.length };
 
     msg.name = null;
