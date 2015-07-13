@@ -173,12 +173,11 @@ final class ClientCall
     {
         this.sock = sock;
         msg = MessageHeader!ulong();
-        msg.ctrl!0.level = SOL_RXRPC;
-        msg.ctrl!0.type = RXRPC_USER_CALL_ID;
         // Nwf has an email from dhowells that says this is true
         // Something, something, "trust but verify", etc., etc.
+        // TODO change from ulong to whatever the binding for C ulong is
         static assert((void*).sizeof <= ulong.sizeof);
-        msg.ctrl!0.data = cast(ulong)cast(void*)this;
+        setCallID!0(msg, cast(ulong)cast(void*)this);
 
         msg.name = &target;
         msg.namelen = sockaddr.sizeof;
@@ -310,6 +309,7 @@ final class ClientSocket
     package bool send(MessageHeader)(in MessageHeader msg, bool end = true)
     {
         // TODO check connected, but this will err and set errno if we're not connected
+        // TODO use end
         ssize_t success = sendmsg(sock, cast(msghdr*)&msg, 0);
         return success == msg.totalMessageLength;
     }
@@ -380,6 +380,7 @@ class ServerCall
 
     private bool awaitingData;
     private bool awaitingAck;
+    private bool inProgress;
 
     Task owner;
 
@@ -387,43 +388,133 @@ class ServerCall
     {
         sock = s;
         awaitingData = false;
-
         awaitingAck = false;
+
+        inProgress = true;
     }
 
-    void recvEntireMessage(iovec[] iovs, out UntypedMessageHeader msg, out ssize_t result)
+    private UntypedMessageHeader buildMsgForIov(iovec[] iovs, uint cmsg_len = 128)
     {
-        msg = UntypedMessageHeader(128);
+        UntypedMessageHeader msg = UntypedMessageHeader(cmsg_len);
         msg.iov = iovs.ptr;
         msg.iovlen = iovs.length;
-        result  = sock.recv(this, msg);
+
+        return msg;
+    }
+    
+    private MessageHeader!(T) buildMsgForIov(T...)(iovec[] iovs)
+    {
+        MessageHeader!(T) msg;
+        msg.iov = iovs.ptr;
+        msg.iovlen = iovs.length;
+
+        return msg;
+    }
+
+    private void recvFromBuffer(UntypedMessageHeader msg, out ssize_t result)
+    in {
+        assert(messagebuffer.length > 0);
+    }
+    body {
+        // We're copying the first msg out of the buffer
+        // Don't just copy because we basically need to preserve the semantics
+        // of the syscall, specifically filling up the buffers that were
+        // provided.
+        socklen_t min_namelen = min(msg.namelen, messagebuffer[0].namelen);
+        msg.namelen = min_namelen;
+        msg.name[0 .. min_namelen] = msg.name[0 .. min_namelen];
+
+        // Copy the iovecs
+        ulong source_iovec_bytes_copied = 0;
+        ulong target_iovec_bytes_copied = 0;
+        for (uint source_iovec_idx = 0, target_iovec_idx = 0;
+             source_iovec_idx < messagebuffer[0].iovlen && target_iovec_idx < msg.iovlen;
+            )
+        {
+            if (source_iovec_bytes_copied == messagebuffer[0].iov[source_iovec_idx].iov_len)
+            {
+                source_iovec_idx += 1;
+                continue;
+            }
+            if (target_iovec_bytes_copied == msg.iov[target_iovec_idx].iov_len)
+            {
+                target_iovec_idx += 1;
+                continue;
+            }
+            
+            ulong bytes_this_round = min(
+                msg.iov             [target_iovec_idx].iov_len - target_iovec_bytes_copied,
+                messagebuffer[0].iov[source_iovec_idx].iov_len - source_iovec_bytes_copied);
+            msg.iov[target_iovec_idx].iov_base[target_iovec_bytes_copied .. target_iovec_bytes_copied + bytes_this_round] =
+                messagebuffer[0].iov[source_iovec_idx].iov_base[target_iovec_bytes_copied .. target_iovec_bytes_copied + bytes_this_round];
+            target_iovec_bytes_copied += bytes_this_round;
+            source_iovec_bytes_copied += bytes_this_round;
+        }
+
+        msg.flags = messagebuffer[0].flags;
+
+
+        // Take this message out of the buffer
+        messagebuffer = messagebuffer[1 .. $];
+    }
+
+    private void recvMessage(UntypedMessageHeader msg, out ssize_t result)
+    {
+        if (messagebuffer.length > 0)
+        {
+            recvFromBuffer(msg, result);
+        }
+        else
+        {
+            result  = sock.recv(this, msg);
+        }
+    }
+
+    private bool updateInProgress(in UntypedMessageHeader msg)
+    {
+        bool end = (msg.flags() & MSG_EOR) != 0;
+        if (end)
+        {
+            inProgress = false;
+        }
+        return end;
     }
 
     ssize_t recv(iovec[] iovs, out bool end)
     {
-        UntypedMessageHeader msg;
+        UntypedMessageHeader msg = buildMsgForIov(iovs);
         ssize_t result;
 
-        recvEntireMessage(iovs, msg, result);
+        scope (exit) awaitingData = false;
+        awaitingData = true;
 
-        end = (msg.flags() & MSG_EOR) != 0;
-        if (end)
-        {
-            // inProgress = false;
-        }
+        recvMessage(msg, result);
+
+        end = updateInProgress(msg);
         return result;
     }
 
-    void send()
+    bool send(iovec[] iovs, bool end = true)
     {
+        MessageHeader!ulong msg = buildMsgForIov!ulong(iovs);
+        // TODO change from ulong to whatever the binding for C ulong is
+        static assert((void*).sizeof <= ulong.sizeof);
+        setCallID!0(msg, cast(ulong)cast(void*)this);
+        return sock.send(msg, end);
     }
 
     void awaitFinalAck()
     {
-        UntypedMessageHeader msg;
+        UntypedMessageHeader msg = buildMsgForIov([]);
         ssize_t result;
+        scope (exit) awaitingAck = false;
+        awaitingAck = true;
 
-        recvEntireMessage([], msg, result);
+        while (inProgress)
+        {
+            recvMessage(msg, result);
+            updateInProgress(msg);
+        }
     }
 }
 
@@ -699,32 +790,11 @@ final class ServerSocket
         }
     }
 
-    /*private static ulong getCallID(in UntypedMessageHeader hdr)
+    package bool send(MessageHeader)(in MessageHeader msg, bool end = true)
     {
-        foreach (ref ctrl_msg; hdr.ctrl_list)
-        {
-            if (ctrl_msg.level != SOL_RXRPC || ctrl_msg.type != RXRPC_USER_CALL_ID)
-            {
-                continue;
-            }
-
-            return ctrl_msg.to!ulong.data;
-        }
-        assert(0);
+        // TODO check connected, but this will err and set errno if we're not connected
+        // TODO check end
+        ssize_t success = sendmsg(sock, cast(msghdr*)&msg, 0);
+        return success == msg.totalMessageLength;
     }
-
-    private static extern(C) void onRecv(evutil_socket_t sock, short what, void* ctx) @system
-    {
-        ClientSocket* sock_obj = cast(ClientSocket*) ctx;
-
-        auto hdr = UntypedMessageHeader(128);
-        hdr.iov = null;
-        hdr.iovlen = 0;
-        recvmsg(sock, cast(msghdr*)&hdr, MSG_PEEK);
-
-        Call call = cast(Call)cast(void*)getCallID(hdr);
-        // Now, the hdr says which call this is associated with in the control
-        // messages, so resume that task
-        call.sock.core.resumeTask(call.owner);
-    }*/
 }
