@@ -382,15 +382,24 @@ class ServerCall
     private bool awaitingAck;
     private bool inProgress;
 
+    private ServerSocket.CallResponse entrypoint;
+
     Task owner;
 
-    this(ServerSocket s)
+    this(ServerSocket s, ServerSocket.CallResponse ep)
     {
         sock = s;
         awaitingData = false;
         awaitingAck = false;
 
         inProgress = true;
+
+        entrypoint = ep;
+    }
+
+    void start()
+    {
+        entrypoint(this);
     }
 
     private UntypedMessageHeader buildMsgForIov(iovec[] iovs, uint cmsg_len = 128)
@@ -401,7 +410,7 @@ class ServerCall
 
         return msg;
     }
-    
+
     private MessageHeader!(T) buildMsgForIov(T...)(iovec[] iovs)
     {
         MessageHeader!(T) msg;
@@ -441,7 +450,7 @@ class ServerCall
                 target_iovec_idx += 1;
                 continue;
             }
-            
+
             ulong bytes_this_round = min(
                 msg.iov             [target_iovec_idx].iov_len - target_iovec_bytes_copied,
                 messagebuffer[0].iov[source_iovec_idx].iov_len - source_iovec_bytes_copied);
@@ -542,9 +551,10 @@ final class ServerSocket
         event* recv_event;
         int sock;
         uint recvs_in_progress;
+        CallResponse response;
     }
 
-    private this()
+    this()
     {
         this.driver = cast(Libevent2Driver)getEventDriver();
         // Only compatible with the libevent2 driver
@@ -553,8 +563,15 @@ final class ServerSocket
         event_loop = driver.eventLoop;
     }
 
-    void listen(in sockaddr addr, SecurityLevel security_level)
+    void listen(in sockaddr addr, SecurityLevel security_level, void function(ServerCall) resp)
     {
+        this.listen(addr, security_level, (ServerCall r) => resp(r));
+    }
+
+    void listen(in sockaddr addr, SecurityLevel security_level, CallResponse resp)
+    {
+        response = resp;
+
         sock = socket(AF_RXRPC, SOCK_DGRAM, addr.addr.transport.family);
         enforce(evutil_make_socket_nonblocking(sock) == 0);
 
@@ -565,7 +582,7 @@ final class ServerSocket
         }
 
         // TODO check return code
-        bind(sock, cast(std.c.linux.socket.sockaddr*)&addr, cast(uint)typeof(addr).sizeof);
+        .bind(sock, cast(std.c.linux.socket.sockaddr*)&addr, cast(uint)typeof(addr).sizeof);
 
         .listen(sock, 100);
 
@@ -651,7 +668,7 @@ final class ServerSocket
     ServerCall createCall()
     {
         // Create the metadata for this call
-        auto c = new ServerCall(this);
+        auto c = new ServerCall(this, response);
         tracef("new call c = ", cast(void*)c);
 
         GC.addRoot(cast(void*)c);
@@ -682,10 +699,17 @@ final class ServerSocket
         trace("RXRPC ACCEPT sendmsg = %d %d", success, errno);
     }
 
+    void startCall(ServerCall c)
+    {
+        import vibe.core.core : runTask;
+        runTask(() => c.start());
+    }
+
     void createAndAcceptCall()
     {
         ServerCall call = createCall();
         acceptCall(call);
+        startCall(call);
     }
 
     void deliverData(ServerCall call, long payload_length)
