@@ -570,31 +570,39 @@ final class ServerSocket
 
     void listen(in sockaddr addr, SecurityLevel security_level, CallResponse resp)
     {
+        trace("made it into the serversocket listen function");
         response = resp;
 
         sock = socket(AF_RXRPC, SOCK_DGRAM, addr.addr.transport.family);
         enforce(evutil_make_socket_nonblocking(sock) == 0);
+        trace("created the socket");
 
         int result = setsockopt(sock, SOL_RXRPC, RXRPC_MIN_SECURITY_LEVEL, &security_level, typeof(security_level).sizeof);
         if (result < 0)
         {
             throw new Exception("setsockopt failed with errno = " ~ to!string(errno));
         }
+        trace("set the security level option on the socket.");
 
         // TODO check return code
         .bind(sock, cast(std.c.linux.socket.sockaddr*)&addr, cast(uint)typeof(addr).sizeof);
+        trace("socket is bound");
 
         .listen(sock, 100);
+        trace("listening on the socket");
 
         // TODO look at the socket options that vibe.d sets on this in the TCP listener
         // TODO allow incoming calls to go to multiple threads if the right options are set
 
         auto evloop = getThreadLibeventEventLoop();
-        event_new(evloop, sock, EV_READ | EV_PERSIST, &onRecv, cast(void*)this);
+        recv_event = event_new(evloop, sock, EV_READ | EV_PERSIST, &onRecv, cast(void*)this);
+        event_add(recv_event, null);
+        trace("created a new libevent event");
     }
 
     extern(C) static void onRecv(evutil_socket_t sock, short evtype, void* arg)
     {
+        trace("onRecv!");
         ServerSocket socket_object = cast(ServerSocket)arg;
         auto hdr = UntypedMessageHeader(128);
         hdr.iov = null;
