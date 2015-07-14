@@ -22,6 +22,8 @@ import std.typecons;
 import std.c.linux.socket;
 import std.c.linux.rxrpc;
 
+import std.experimental.logger;
+
 import core.memory;
 import core.stdc.errno;
 import core.sys.posix.poll;
@@ -38,6 +40,8 @@ int main(string[] args)
         writeln("Exactly one argument expected, either \"--ping\" or \"--pong\".");
         return 1;
     }
+
+    sharedLog.logLevel = LogLevel.trace;
 
     if( args[1] == "--ping" )
     {
@@ -138,5 +142,7 @@ void server()
     my_addr.service = PING_SERVICE_ID;
     my_addr.setIPv4(PING_SERVER_PORT, 0);
 
+    trace("About to call listen on the server socket");
+    server_socket = new ServerSocket();
     server_socket.listen(my_addr, vibe.core.drivers.rx.SecurityLevel.Plain, &pong);
 }
