@@ -616,8 +616,6 @@ final class ServerSocket
                     // running and an event loop and things.
         }
 
-        ServerCall call = cast(ServerCall)cast(void*)getCallID(hdr);
-
         trace("Success = ", success, " ", hdr.controllen);
 
         trace("CTRL MSGS = %d", hdr.ctrl_list.length);
