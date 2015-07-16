@@ -113,6 +113,7 @@ void ping()
 
 void pong(vibe.core.drivers.rx.ServerCall call)
 {
+    trace("Entered PONG!");
     {
         ubyte[128] msg_string;
         iovec msg_contents = { cast(void*)msg_string.ptr, msg_string.length };

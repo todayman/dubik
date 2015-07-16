@@ -229,10 +229,15 @@ private ulong getCallID(in UntypedMessageHeader hdr)
 {
     foreach (ref ctrl_msg; hdr.ctrl_list)
     {
+        trace("Found a control message.  Maybe it's the RX call id.");
+        trace("Message level = ", ctrl_msg.level, " (SOL_RXRPC = ", SOL_RXRPC, ").");
+        trace("Message type = ", ctrl_msg.type, " (RXRPC_USER_CALL_ID = ", RXRPC_USER_CALL_ID, ").");
         if (ctrl_msg.level != SOL_RXRPC || ctrl_msg.type != RXRPC_USER_CALL_ID)
         {
+            trace("It was not the call id");
             continue;
         }
+        trace("It was the call id!");
 
         return ctrl_msg.to!ulong.data;
     }
@@ -399,6 +404,7 @@ class ServerCall
 
     void start()
     {
+        trace("Servercall.start()");
         entrypoint(this);
     }
 
@@ -618,15 +624,15 @@ final class ServerSocket
 
         trace("Success = ", success, " ", hdr.controllen);
 
-        trace("CTRL MSGS = %d", hdr.ctrl_list.length);
+        trace("CTRL MSGS = ", hdr.ctrl_list.length);
         Nullable!ulong this_call;
         Nullable!long this_abort;
         bool this_finack;
         foreach (ref const UntypedControlMessage ctrl_msg ; hdr.ctrl_list)
         {
-            trace("CTRL MSG: %d %d %d",
-                ctrl_msg.level,
-                ctrl_msg.type,
+            trace("CTRL MSG: ",
+                ctrl_msg.level, " ",
+                ctrl_msg.type, " ",
                 ctrl_msg.totalLength());
             // We only care about RXRPC control messages
             if(ctrl_msg.level != SOL_RXRPC) { continue; }
@@ -653,20 +659,21 @@ final class ServerSocket
         trace("Done with control messages.");
 
         if(!this_call.isNull) {
-            ServerCall c = cast(ServerCall)cast(void*)(this_call.get());
+            ServerCall call = cast(ServerCall)cast(void*)(this_call.get());
+            trace("Found call ", cast(void*)call);
             if(success > 0) {
-                socket_object.deliverData(c, success);
+                socket_object.deliverData(call, success);
             }
             if(this_finack) {
-                socket_object.finalAck(c, success);
+                socket_object.finalAck(call, success);
             }
             if(!this_abort.isNull) {
-                socket_object.abortCall(c, success);
+                socket_object.abortCall(call, success);
             }
             // XXX Yes?  Maybe?  Is this really when the kernel drops the ID?
             if(!this_abort.isNull || this_finack) {
-              writeln("Enabling GC on ", cast(void *)c);
-              GC.removeRoot(cast(void*)c);
+              writeln("Enabling GC on ", cast(void *)call);
+              GC.removeRoot(cast(void*)call);
             }
         }
     }
@@ -674,7 +681,7 @@ final class ServerSocket
     ServerCall createCall()
     {
         // Create the metadata for this call
-        auto c = new ServerCall(this, response);
+        ServerCall c = new ServerCall(this, response);
         tracef("new call c = ", cast(void*)c);
 
         GC.addRoot(cast(void*)c);
@@ -705,11 +712,12 @@ final class ServerSocket
         // socket
         recvMessage(0);
         ssize_t success = sendmsg(sock, cast(msghdr*)&msg, 0);
-        trace("RXRPC ACCEPT sendmsg = %d %d", success, errno);
+        trace("RXRPC ACCEPT sendmsg = ", success, " ", errno);
     }
 
     void startCall(ServerCall c)
     {
+        trace("Starting call ", cast(void*)c);
         import vibe.core.core : runTask;
         runTask(() => c.start());
     }
@@ -723,6 +731,7 @@ final class ServerSocket
 
     void deliverData(ServerCall call, long payload_length)
     {
+        trace("Entered deliverData");
         // TODO what if call is awaiting data and there is data in the buffer?
         // is that a real scenario?
         if (call.awaitingData)
