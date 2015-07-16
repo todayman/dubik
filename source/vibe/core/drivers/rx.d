@@ -703,6 +703,9 @@ final class ServerSocket
         msg.iovlen = 0;
         msg.flags = 0;
 
+        // Since we only peeked at it before, make sure to read it out of the
+        // socket
+        recvMessage(0);
         ssize_t success = sendmsg(sock, cast(msghdr*)&msg, 0);
         trace("RXRPC ACCEPT sendmsg = %d %d", success, errno);
     }
