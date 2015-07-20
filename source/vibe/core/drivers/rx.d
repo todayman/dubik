@@ -419,7 +419,7 @@ class ServerCall
 
     private MessageHeader!(T) buildMsgForIov(T...)(iovec[] iovs)
     {
-        MessageHeader!(T) msg;
+        auto msg = MessageHeader!(T)();
         msg.iov = iovs.ptr;
         msg.iovlen = iovs.length;
 
