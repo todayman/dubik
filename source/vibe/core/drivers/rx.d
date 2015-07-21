@@ -581,7 +581,7 @@ final class ServerSocket
 
         sock = socket(AF_RXRPC, SOCK_DGRAM, addr.addr.transport.family);
         enforce(evutil_make_socket_nonblocking(sock) == 0);
-        trace("created the socket");
+        trace("created the socket (", sock, ")");
 
         int result = setsockopt(sock, SOL_RXRPC, RXRPC_MIN_SECURITY_LEVEL, &security_level, typeof(security_level).sizeof);
         if (result < 0)
@@ -591,7 +591,11 @@ final class ServerSocket
         trace("set the security level option on the socket.");
 
         // TODO check return code
-        .bind(sock, cast(std.c.linux.socket.sockaddr*)&addr, cast(uint)typeof(addr).sizeof);
+        result = .bind(sock, cast(std.c.linux.socket.sockaddr*)&addr, cast(uint)typeof(addr).sizeof);
+        if (result < 0)
+        {
+            throw new Exception("bind failed with errno = " ~ to!string(errno));
+        }
         trace("socket is bound");
 
         .listen(sock, 100);
@@ -611,13 +615,17 @@ final class ServerSocket
         trace("onRecv!");
         ServerSocket socket_object = cast(ServerSocket)arg;
         auto hdr = UntypedMessageHeader(128);
-        hdr.iov = null;
-        hdr.iovlen = 0;
+        iovec i;
+        ubyte[1] buffer;
+        i.iov_base = buffer.ptr;
+        i.iov_len = 1;
+        hdr.iov = &i;
+        hdr.iovlen = 1;
         ssize_t success = .recvmsg(sock, cast(msghdr*)&hdr, MSG_PEEK);
         if (success < 0)
         {
             error("Peek Receive failed!");
-            error("Errno = %d", errno);
+            error("Errno = ", errno);
             return; // TODO this is probably incorrect, since there are tasks
                     // running and an event loop and things.
         }
@@ -662,7 +670,7 @@ final class ServerSocket
             ServerCall call = cast(ServerCall)cast(void*)(this_call.get());
             trace("Found call ", cast(void*)call);
             if(success > 0) {
-                socket_object.deliverData(call, success);
+                socket_object.deliverData(call);
             }
             if(this_finack) {
                 socket_object.finalAck(call, success);
@@ -729,7 +737,7 @@ final class ServerSocket
         startCall(call);
     }
 
-    void deliverData(ServerCall call, long payload_length)
+    void deliverData(ServerCall call)
     {
         trace("Entered deliverData");
         // TODO what if call is awaiting data and there is data in the buffer?
@@ -740,24 +748,33 @@ final class ServerSocket
         }
         else
         {
-            UntypedMessageHeader hdr = recvMessage(payload_length);
+            UntypedMessageHeader hdr = recvMessage();
 
             // TODO Fix postblit on UntypedMessageHeader
             call.messagebuffer ~= [hdr];
         }
     }
 
-    UntypedMessageHeader recvMessage(long payload_length)
+    UntypedMessageHeader recvMessage(long payload_length = 1500)
     {
         UntypedMessageHeader hdr = UntypedMessageHeader(128);
-        ubyte[] buffer = new ubyte[payload_length];
-        iovec[] iovs = new iovec[1];
-        iovs[0].iov_base = cast(void*)buffer.ptr;
-        iovs[0].iov_len = buffer.length;
-        hdr.iov = iovs.ptr;
-        hdr.iovlen = iovs.length;
 
-        .recvmsg(sock, cast(msghdr*)&hdr, 0);
+        do
+        {
+            ubyte[] buffer = new ubyte[payload_length];
+            iovec[] iovs = new iovec[1];
+            iovs[0].iov_base = cast(void*)buffer.ptr;
+            iovs[0].iov_len = buffer.length;
+            hdr.iov = iovs.ptr;
+            hdr.iovlen = iovs.length;
+
+            ssize_t bytes_received = .recvmsg(sock, cast(msghdr*)&hdr, MSG_PEEK);
+            payload_length *= 2;
+        }
+        while ((hdr.flags & MSG_TRUNC) != 0);
+
+        UntypedMessageHeader empty_hdr = UntypedMessageHeader(1);
+        recvmsg(sock, cast(msghdr*)&empty_hdr, 0);
 
         return hdr;
     }
