@@ -321,6 +321,12 @@ struct UntypedMessageHeader
         hdr.msg_controllen = ctrl_buffer.length;
     }
 
+    this(this)
+    {
+        ctrl_buffer = ctrl_buffer.dup;
+        hdr.msg_control = ctrl_buffer.ptr;
+    }
+
     private struct ControlListLooper
     {
         private msghdr* hdr;
