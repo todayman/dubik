@@ -30,6 +30,7 @@ import core.sys.posix.poll;
 
 import message_headers;
 import vibe.core.core;
+static import vibe.core.log;
 import vibe.core.drivers.rx;
 
 ServerSocket server_socket;
@@ -42,6 +43,7 @@ int main(string[] args)
     }
 
     sharedLog.logLevel = LogLevel.trace;
+    vibe.core.log.setLogLevel(vibe.core.log.LogLevel.debug_);
 
     if( args[1] == "--ping" )
     {
