@@ -162,16 +162,25 @@ void setCallID(MessageHeader)(ref MessageHeader msg, size_t idx, ulong call_id)
     msg.ctrl!ulong(idx).data = call_id;
 }
 
-final class ClientCall
+class Call
 {
-    ClientSocket sock;
+    Socket sock;
+    Task owner;
+
+    this(Socket s)
+    {
+        sock = s;
+    }
+}
+
+final class ClientCall : Call
+{
     MessageHeader!ulong msg;
     bool inProgress = false;
-    Task owner;
 
     this(ClientSocket sock, ref sockaddr target)
     {
-        this.sock = sock;
+        super(sock);
         msg = MessageHeader!ulong();
         // Nwf has an email from dhowells that says this is true
         // Something, something, "trust but verify", etc., etc.
@@ -242,17 +251,6 @@ private ulong getCallID(in UntypedMessageHeader hdr)
         return ctrl_msg.to!ulong.data;
     }
     assert(0);
-}
-
-class Call
-{
-    Socket sock;
-    Task owner;
-
-    this(Socket s)
-    {
-        sock = s;
-    }
 }
 
 class Socket
@@ -329,28 +327,15 @@ class Socket
 }
 
 // Modeled after vibe.core.drivers.libevent2.UDPConnection
-final class ClientSocket
+final class ClientSocket : Socket
 {
     import std.conv : to;
     import core.stdc.errno : errno;
     import message_headers : UntypedMessageHeader;
 
-    private {
-        DriverCore core;
-        Libevent2Driver driver;
-        event_base* event_loop;
-        event* recv_event;
-        int sock;
-        uint recvs_in_progress;
-    }
-
     this(SecurityLevel security_level)
     {
-        this.driver = cast(Libevent2Driver)getEventDriver();
-        // Only compatible with the libevent2 driver
-        assert(this.driver);
-        this.core = getThreadLibeventDriverCore();
-        event_loop = driver.eventLoop;
+        super();
         sockaddr addr; // sockaddr.init has the right values for a client
 
         sock = socket(AF_RXRPC, SOCK_DGRAM, addr.addr.transport.family);
@@ -393,56 +378,6 @@ final class ClientSocket
     ClientCall call(ref sockaddr addr)
     {
         return new ClientCall(this, addr);
-    }
-
-    package bool send(MessageHeader)(in MessageHeader msg, bool end = true)
-    {
-        // TODO check connected, but this will err and set errno if we're not connected
-        // TODO use end
-        ssize_t success = sendmsg(sock, cast(msghdr*)&msg, 0);
-        return success == msg.totalMessageLength;
-    }
-
-    package ssize_t recv(ClientCall c, ref UntypedMessageHeader msg)
-    {
-        if (recvs_in_progress == 0)
-        {
-            event_add(recv_event, null);
-        }
-        recvs_in_progress += 1;
-
-        scope(exit)
-        {
-            recvs_in_progress -= 1;
-
-            if (recvs_in_progress == 0)
-            {
-                enforce(event_del(recv_event) == 0);
-            }
-        }
-
-        c.owner = Task.getThis();
-
-        while (true)
-        {
-            // Yielding here means that we wait for the socket to decide that
-            // this fiber needs to run again It will do that *only* when there
-            // is a message *for this call*.
-
-            core.yieldForEvent();
-            ssize_t result = recvmsg(sock, cast(msghdr*)&msg, 0);
-            if (result > 0)
-            {
-                return result;
-            }
-            else if (result < 0)
-            {
-                if (errno != EWOULDBLOCK)
-                {
-                    throw new Exception("Failure in recv: " ~ to!string(errno));
-                }
-            }
-        }
     }
 
     private static extern(C) void onRecv(evutil_socket_t sock, short what, void* ctx) @system
