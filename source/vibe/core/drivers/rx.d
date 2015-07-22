@@ -756,7 +756,10 @@ final class ServerSocket
     }
 
     UntypedMessageHeader recvMessage(long payload_length = 1500)
-    {
+    in {
+        assert(payload_length >= 0);
+    }
+    body {
         UntypedMessageHeader hdr = UntypedMessageHeader(128);
 
         do
@@ -769,12 +772,27 @@ final class ServerSocket
             hdr.iovlen = iovs.length;
 
             ssize_t bytes_received = .recvmsg(sock, cast(msghdr*)&hdr, MSG_PEEK);
+
+            if (bytes_received >= 0)
+            {
+                // Make sure to shorten the buffer to only the part that has
+                // been filled.  Updating the base pointer should be a no-op.
+                // TODO Maybe recvmsg changes the length automatically?
+
+                buffer = buffer[0 .. bytes_received];
+                iovs[0].iov_base = cast(void*)buffer.ptr;
+                iovs[0].iov_len = buffer.length;
+            }
             payload_length *= 2;
         }
         while ((hdr.flags & MSG_TRUNC) != 0);
 
         UntypedMessageHeader empty_hdr = UntypedMessageHeader(1);
-        recvmsg(sock, cast(msghdr*)&empty_hdr, 0);
+        ssize_t total_bytes = recvmsg(sock, cast(msghdr*)&empty_hdr, 0);
+
+        // We only query recvmsg when we have been notified that there is data
+        // waiting, so there should not be an error here when we extract it.
+        assert(total_bytes >= 0);
 
         return hdr;
     }
