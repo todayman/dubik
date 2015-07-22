@@ -244,6 +244,90 @@ private ulong getCallID(in UntypedMessageHeader hdr)
     assert(0);
 }
 
+class Call
+{
+    Socket sock;
+    Task owner;
+
+    this(Socket s)
+    {
+        sock = s;
+    }
+}
+
+class Socket
+{
+    private
+    {
+        DriverCore core;
+        Libevent2Driver driver;
+        event_base* event_loop;
+        event* recv_event;
+        int sock;
+        uint recvs_in_progress;
+    }
+
+    this()
+    {
+        this.driver = cast(Libevent2Driver)getEventDriver();
+        // Only compatible with the libevent2 driver
+        assert(this.driver);
+        this.core = getThreadLibeventDriverCore();
+        event_loop = driver.eventLoop;
+    }
+
+    package bool send(MessageHeader)(in MessageHeader msg, bool end = true)
+    {
+        // TODO check connected, but this will err and set errno if we're not connected
+        // TODO check end
+        ssize_t success = sendmsg(sock, cast(msghdr*)&msg, 0);
+        return success == msg.totalMessageLength;
+    }
+
+    package ssize_t recv(Call c, ref UntypedMessageHeader msg)
+    {
+        if (recvs_in_progress == 0)
+        {
+            event_add(recv_event, null);
+        }
+        recvs_in_progress += 1;
+
+        scope(exit)
+        {
+            recvs_in_progress -= 1;
+
+            if (recvs_in_progress == 0)
+            {
+                enforce(event_del(recv_event) == 0);
+            }
+        }
+
+        c.owner = Task.getThis();
+
+        while (true)
+        {
+            // Yielding here means that we wait for the socket to decide that
+            // this fiber needs to run again It will do that *only* when there
+            // is a message *for this call*.
+
+            core.yieldForEvent();
+            ssize_t result = recvmsg(sock, cast(msghdr*)&msg, 0);
+            if (result > 0)
+            {
+                return result;
+            }
+            else if (result < 0)
+            {
+                if (errno != EWOULDBLOCK)
+                {
+                    throw new Exception("Failure in recv: " ~ to!string(errno));
+                }
+            }
+        }
+    }
+
+}
+
 // Modeled after vibe.core.drivers.libevent2.UDPConnection
 final class ClientSocket
 {
@@ -377,10 +461,8 @@ final class ClientSocket
     }
 }
 
-class ServerCall
+class ServerCall : Call
 {
-    private ServerSocket sock;
-
     private UntypedMessageHeader[] messagebuffer;
 
     private bool awaitingData;
@@ -389,11 +471,9 @@ class ServerCall
 
     private ServerSocket.CallResponse entrypoint;
 
-    Task owner;
-
     this(ServerSocket s, ServerSocket.CallResponse ep)
     {
-        sock = s;
+        super(s);
         awaitingData = false;
         awaitingAck = false;
 
@@ -544,29 +624,14 @@ class AbortException : Exception
 }
 
 // Modeled after vibe.core.drivers.libevent2.TCPConnection
-final class ServerSocket
+final class ServerSocket : Socket
 {
     import core.stdc.errno : errno;
     import message_headers : UntypedMessageHeader;
 
     public alias CallResponse = void delegate(ServerCall);
     private {
-        DriverCore core;
-        Libevent2Driver driver;
-        event_base* event_loop;
-        event* recv_event;
-        int sock;
-        uint recvs_in_progress;
         CallResponse response;
-    }
-
-    this()
-    {
-        this.driver = cast(Libevent2Driver)getEventDriver();
-        // Only compatible with the libevent2 driver
-        assert(this.driver);
-        this.core = getThreadLibeventDriverCore();
-        event_loop = driver.eventLoop;
     }
 
     void listen(in sockaddr addr, SecurityLevel security_level, void function(ServerCall) resp)
@@ -825,53 +890,4 @@ final class ServerSocket
         }
     }
 
-    package ssize_t recv(ServerCall c, ref UntypedMessageHeader msg)
-    {
-        if (recvs_in_progress == 0)
-        {
-            event_add(recv_event, null);
-        }
-        recvs_in_progress += 1;
-
-        scope(exit)
-        {
-            recvs_in_progress -= 1;
-
-            if (recvs_in_progress == 0)
-            {
-                enforce(event_del(recv_event) == 0);
-            }
-        }
-
-        c.owner = Task.getThis();
-
-        while (true)
-        {
-            // Yielding here means that we wait for the socket to decide that
-            // this fiber needs to run again It will do that *only* when there
-            // is a message *for this call*.
-
-            core.yieldForEvent();
-            ssize_t result = recvmsg(sock, cast(msghdr*)&msg, 0);
-            if (result > 0)
-            {
-                return result;
-            }
-            else if (result < 0)
-            {
-                if (errno != EWOULDBLOCK)
-                {
-                    throw new Exception("Failure in recv: " ~ to!string(errno));
-                }
-            }
-        }
-    }
-
-    package bool send(MessageHeader)(in MessageHeader msg, bool end = true)
-    {
-        // TODO check connected, but this will err and set errno if we're not connected
-        // TODO check end
-        ssize_t success = sendmsg(sock, cast(msghdr*)&msg, 0);
-        return success == msg.totalMessageLength;
-    }
 }
