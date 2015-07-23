@@ -164,13 +164,105 @@ void setCallID(MessageHeader)(ref MessageHeader msg, size_t idx, ulong call_id)
 
 class Call
 {
-    Socket sock;
-    Task owner;
+    private UntypedMessageHeader[] messagebuffer;
 
-    this(Socket s)
+    private bool awaitingData;
+    private bool inProgress;
+    private Socket sock;
+    private Task owner;
+
+    package this(Socket s)
     {
         sock = s;
     }
+
+    private void recvFromBuffer(UntypedMessageHeader msg, out ssize_t result)
+    in {
+        assert(messagebuffer.length > 0);
+    }
+    body {
+        // We're copying the first msg out of the buffer
+        // Don't just copy because we basically need to preserve the semantics
+        // of the syscall, specifically filling up the buffers that were
+        // provided.
+        socklen_t min_namelen = min(msg.namelen, messagebuffer[0].namelen);
+        msg.namelen = min_namelen;
+        msg.name[0 .. min_namelen] = msg.name[0 .. min_namelen];
+
+        // Copy the iovecs
+        ulong source_iovec_bytes_copied = 0;
+        ulong target_iovec_bytes_copied = 0;
+        for (uint source_iovec_idx = 0, target_iovec_idx = 0;
+             source_iovec_idx < messagebuffer[0].iovlen && target_iovec_idx < msg.iovlen;
+            )
+        {
+            if (source_iovec_bytes_copied == messagebuffer[0].iov[source_iovec_idx].iov_len)
+            {
+                source_iovec_idx += 1;
+                continue;
+            }
+            if (target_iovec_bytes_copied == msg.iov[target_iovec_idx].iov_len)
+            {
+                target_iovec_idx += 1;
+                continue;
+            }
+
+            ulong bytes_this_round = min(
+                msg.iov             [target_iovec_idx].iov_len - target_iovec_bytes_copied,
+                messagebuffer[0].iov[source_iovec_idx].iov_len - source_iovec_bytes_copied);
+            msg.iov[target_iovec_idx].iov_base[target_iovec_bytes_copied .. target_iovec_bytes_copied + bytes_this_round] =
+                messagebuffer[0].iov[source_iovec_idx].iov_base[target_iovec_bytes_copied .. target_iovec_bytes_copied + bytes_this_round];
+            target_iovec_bytes_copied += bytes_this_round;
+            source_iovec_bytes_copied += bytes_this_round;
+        }
+
+        msg.flags = messagebuffer[0].flags;
+
+
+        // Take this message out of the buffer
+        messagebuffer = messagebuffer[1 .. $];
+    }
+
+    private static UntypedMessageHeader buildMsgForIov(iovec[] iovs, uint cmsg_len = 128)
+    {
+        UntypedMessageHeader msg = UntypedMessageHeader(cmsg_len);
+        msg.iov = iovs.ptr;
+        msg.iovlen = iovs.length;
+
+        return msg;
+    }
+
+    private static MessageHeader!(T) buildMsgForIov(T...)(iovec[] iovs)
+    {
+        auto msg = MessageHeader!(T)();
+        msg.iov = iovs.ptr;
+        msg.iovlen = iovs.length;
+
+        return msg;
+    }
+
+    private bool updateInProgress(in UntypedMessageHeader msg)
+    {
+        bool end = (msg.flags() & MSG_EOR) != 0;
+        if (end)
+        {
+            inProgress = false;
+        }
+        return end;
+    }
+
+    private void recvMessage(UntypedMessageHeader msg, out ssize_t result)
+    {
+        if (messagebuffer.length > 0)
+        {
+            recvFromBuffer(msg, result);
+        }
+        else
+        {
+            result  = sock.recv(this, msg);
+        }
+    }
+
 }
 
 final class ClientCall : Call
@@ -211,15 +303,12 @@ final class ClientCall : Call
 
     ssize_t recv(iovec[] iovs, out bool end)
     {
-        UntypedMessageHeader msg = UntypedMessageHeader(128);
-        msg.iov = iovs.ptr;
-        msg.iovlen = iovs.length;
-        ssize_t result = sock.recv(this, msg);
-        end = (msg.flags() & MSG_EOR) != 0;
-        if (end)
-        {
-             inProgress = false;
-        }
+        UntypedMessageHeader msg = buildMsgForIov(iovs);
+        ssize_t result;
+
+        recvMessage(msg, result);
+
+        end = updateInProgress(msg);
         return result;
     }
 
@@ -398,11 +487,7 @@ final class ClientSocket : Socket
 
 class ServerCall : Call
 {
-    private UntypedMessageHeader[] messagebuffer;
-
-    private bool awaitingData;
     private bool awaitingAck;
-    private bool inProgress;
 
     private ServerSocket.CallResponse entrypoint;
 
@@ -423,93 +508,6 @@ class ServerCall : Call
         entrypoint(this);
     }
 
-    private UntypedMessageHeader buildMsgForIov(iovec[] iovs, uint cmsg_len = 128)
-    {
-        UntypedMessageHeader msg = UntypedMessageHeader(cmsg_len);
-        msg.iov = iovs.ptr;
-        msg.iovlen = iovs.length;
-
-        return msg;
-    }
-
-    private MessageHeader!(T) buildMsgForIov(T...)(iovec[] iovs)
-    {
-        auto msg = MessageHeader!(T)();
-        msg.iov = iovs.ptr;
-        msg.iovlen = iovs.length;
-
-        return msg;
-    }
-
-    private void recvFromBuffer(UntypedMessageHeader msg, out ssize_t result)
-    in {
-        assert(messagebuffer.length > 0);
-    }
-    body {
-        // We're copying the first msg out of the buffer
-        // Don't just copy because we basically need to preserve the semantics
-        // of the syscall, specifically filling up the buffers that were
-        // provided.
-        socklen_t min_namelen = min(msg.namelen, messagebuffer[0].namelen);
-        msg.namelen = min_namelen;
-        msg.name[0 .. min_namelen] = msg.name[0 .. min_namelen];
-
-        // Copy the iovecs
-        ulong source_iovec_bytes_copied = 0;
-        ulong target_iovec_bytes_copied = 0;
-        for (uint source_iovec_idx = 0, target_iovec_idx = 0;
-             source_iovec_idx < messagebuffer[0].iovlen && target_iovec_idx < msg.iovlen;
-            )
-        {
-            if (source_iovec_bytes_copied == messagebuffer[0].iov[source_iovec_idx].iov_len)
-            {
-                source_iovec_idx += 1;
-                continue;
-            }
-            if (target_iovec_bytes_copied == msg.iov[target_iovec_idx].iov_len)
-            {
-                target_iovec_idx += 1;
-                continue;
-            }
-
-            ulong bytes_this_round = min(
-                msg.iov             [target_iovec_idx].iov_len - target_iovec_bytes_copied,
-                messagebuffer[0].iov[source_iovec_idx].iov_len - source_iovec_bytes_copied);
-            msg.iov[target_iovec_idx].iov_base[target_iovec_bytes_copied .. target_iovec_bytes_copied + bytes_this_round] =
-                messagebuffer[0].iov[source_iovec_idx].iov_base[target_iovec_bytes_copied .. target_iovec_bytes_copied + bytes_this_round];
-            target_iovec_bytes_copied += bytes_this_round;
-            source_iovec_bytes_copied += bytes_this_round;
-        }
-
-        msg.flags = messagebuffer[0].flags;
-
-
-        // Take this message out of the buffer
-        messagebuffer = messagebuffer[1 .. $];
-    }
-
-    private void recvMessage(UntypedMessageHeader msg, out ssize_t result)
-    {
-        if (messagebuffer.length > 0)
-        {
-            recvFromBuffer(msg, result);
-        }
-        else
-        {
-            result  = sock.recv(this, msg);
-        }
-    }
-
-    private bool updateInProgress(in UntypedMessageHeader msg)
-    {
-        bool end = (msg.flags() & MSG_EOR) != 0;
-        if (end)
-        {
-            inProgress = false;
-        }
-        return end;
-    }
-
     ssize_t recv(iovec[] iovs, out bool end)
     {
         UntypedMessageHeader msg = buildMsgForIov(iovs);
@@ -520,6 +518,7 @@ class ServerCall : Call
 
         recvMessage(msg, result);
 
+        // FIXME should not set inProgress to false at end of request
         end = updateInProgress(msg);
         return result;
     }
@@ -530,7 +529,14 @@ class ServerCall : Call
         // TODO change from ulong to whatever the binding for C ulong is
         static assert((void*).sizeof <= ulong.sizeof);
         setCallID!0(msg, cast(ulong)cast(void*)this);
-        return sock.send(msg, end);
+
+        bool result = sock.send(msg, end);
+
+        if (end)
+        {
+            inProgress = false;
+        }
+        return result;
     }
 
     void awaitFinalAck()
