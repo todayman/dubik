@@ -241,14 +241,9 @@ class Call
         return msg;
     }
 
-    private bool updateInProgress(in UntypedMessageHeader msg)
+    private bool isEndOfMessage(in UntypedMessageHeader msg)
     {
-        bool end = (msg.flags() & MSG_EOR) != 0;
-        if (end)
-        {
-            inProgress = false;
-        }
-        return end;
+        return (msg.flags() & MSG_EOR) != 0;
     }
 
     private void recvMessage(UntypedMessageHeader msg, out ssize_t result)
@@ -299,6 +294,16 @@ final class ClientCall : Call
         msg.iovlen = iovs.length;
         inProgress = true;
         return sock.send(msg, end);
+    }
+
+    private bool updateInProgress(in UntypedMessageHeader msg)
+    {
+        bool end = isEndOfMessage(msg);
+        if (end)
+        {
+            inProgress = false;
+        }
+        return end;
     }
 
     ssize_t recv(iovec[] iovs, out bool end)
@@ -518,8 +523,7 @@ class ServerCall : Call
 
         recvMessage(msg, result);
 
-        // FIXME should not set inProgress to false at end of request
-        end = updateInProgress(msg);
+        end = isEndOfMessage(msg);
         return result;
     }
 
@@ -549,7 +553,7 @@ class ServerCall : Call
         while (inProgress)
         {
             recvMessage(msg, result);
-            updateInProgress(msg);
+            inProgress = isEndOfMessage(msg);
         }
     }
 }
