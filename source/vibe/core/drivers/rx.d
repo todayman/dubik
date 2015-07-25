@@ -258,6 +258,15 @@ class Call
         }
     }
 
+    void abort(int code)
+    {
+        MessageHeader!(ulong, int) abort_msg;
+        abort_msg.ctrl!0 = msg.ctrl!0;
+        abort_msg.ctrl!1.level = SOL_RXRPC;
+        abort_msg.ctrl!1.type = RXRPC_ABORT;
+        abort_msg.ctrl!1.data = code;
+        sock.send(abort_msg);
+    }
 }
 
 final class ClientCall : Call
@@ -315,16 +324,6 @@ final class ClientCall : Call
 
         end = updateInProgress(msg);
         return result;
-    }
-
-    void abort(int code)
-    {
-        MessageHeader!(ulong, int) abort_msg;
-        abort_msg.ctrl!0 = msg.ctrl!0;
-        abort_msg.ctrl!1.level = SOL_RXRPC;
-        abort_msg.ctrl!1.type = RXRPC_ABORT;
-        abort_msg.ctrl!1.data = code;
-        sock.send(abort_msg);
     }
 }
 
