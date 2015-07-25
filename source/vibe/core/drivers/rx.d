@@ -261,7 +261,7 @@ class Call
     void abort(int code)
     {
         MessageHeader!(ulong, int) abort_msg;
-        abort_msg.ctrl!0 = msg.ctrl!0;
+        abort_msg.setCallID!0(cast(ulong)cast(void*)this);
         abort_msg.ctrl!1.level = SOL_RXRPC;
         abort_msg.ctrl!1.type = RXRPC_ABORT;
         abort_msg.ctrl!1.data = code;
