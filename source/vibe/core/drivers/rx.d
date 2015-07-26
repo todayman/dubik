@@ -274,7 +274,7 @@ final class ClientCall : Call
     MessageHeader!ulong msg;
     bool inProgress = false;
 
-    this(ClientSocket sock, ref sockaddr target)
+    this(Socket sock, ref sockaddr target)
     {
         super(sock);
         msg = MessageHeader!ulong();
@@ -531,7 +531,7 @@ class ServerCall : Call
         MessageHeader!ulong msg = buildMsgForIov!ulong(iovs);
         // TODO change from ulong to whatever the binding for C ulong is
         static assert((void*).sizeof <= ulong.sizeof);
-        setCallID!0(msg, cast(ulong)cast(void*)this);
+        msg.setCallID!0(cast(ulong)cast(void*)this);
 
         bool result = sock.send(msg, end);
 
@@ -619,7 +619,7 @@ final class ServerSocket : Socket
         trace("created a new libevent event");
     }
 
-    extern(C) static void onRecv(evutil_socket_t sock, short evtype, void* arg)
+    extern(C) private static void onRecv(evutil_socket_t sock, short evtype, void* arg)
     {
         trace("onRecv!");
         ServerSocket socket_object = cast(ServerSocket)arg;
@@ -695,7 +695,7 @@ final class ServerSocket : Socket
         }
     }
 
-    ServerCall createCall()
+    private ServerCall createCall()
     {
         // Create the metadata for this call
         ServerCall c = new ServerCall(this, response);
@@ -707,7 +707,7 @@ final class ServerSocket : Socket
         return c;
     }
 
-    void acceptCall(ServerCall c)
+    private void acceptCall(ServerCall c)
     {
         // And tell the kernel to accept the call
         auto msg = MessageHeader!(void, ulong)();
@@ -732,21 +732,21 @@ final class ServerSocket : Socket
         trace("RXRPC ACCEPT sendmsg = ", success, " ", errno);
     }
 
-    void startCall(ServerCall c)
+    private void startCall(ServerCall c)
     {
         trace("Starting call ", cast(void*)c);
         import vibe.core.core : runTask;
         runTask(() => c.start());
     }
 
-    void createAndAcceptCall()
+    private void createAndAcceptCall()
     {
         ServerCall call = createCall();
         acceptCall(call);
         startCall(call);
     }
 
-    void deliverData(ServerCall call)
+    private void deliverData(ServerCall call)
     {
         trace("Entered deliverData");
         // TODO what if call is awaiting data and there is data in the buffer?
@@ -764,7 +764,7 @@ final class ServerSocket : Socket
         }
     }
 
-    UntypedMessageHeader recvMessage(long payload_length = 1500)
+    private UntypedMessageHeader recvMessage(long payload_length = 1500)
     in {
         assert(payload_length >= 0);
     }
@@ -806,7 +806,7 @@ final class ServerSocket : Socket
         return hdr;
     }
 
-    void finalAck(ServerCall call, long payload_length)
+    private void finalAck(ServerCall call, long payload_length)
     {
         trace("Dispatch finalack...");
         if (call.awaitingAck)
@@ -820,7 +820,7 @@ final class ServerSocket : Socket
         }
     }
 
-    void abortCall(ServerCall call, long payload_length)
+    private void abortCall(ServerCall call, long payload_length)
     {
         trace("Dispatch abort...");
         if (call.awaitingAck || call.awaitingData)
