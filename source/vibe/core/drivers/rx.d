@@ -162,6 +162,16 @@ void setCallID(MessageHeader)(ref MessageHeader msg, size_t idx, ulong call_id)
     msg.ctrl!ulong(idx).data = call_id;
 }
 
+class AbortException : Exception
+{
+    public long code;
+    public this(long c)
+    {
+        super("RX RPC aborted with code " ~ to!string(c) ~ ".");
+        code = c;
+    }
+}
+
 class Call
 {
     private UntypedMessageHeader[] messagebuffer;
@@ -260,7 +270,21 @@ class Call
         }
     }
 
-    void abort(int code)
+    protected void checkAbort(in UntypedMessageHeader msg)
+    {
+        foreach (ref const UntypedControlMessage ctrl_msg; msg.ctrl_list)
+        {
+            // We only care about RXRPC control messages
+            if(ctrl_msg.level != SOL_RXRPC) { continue; }
+
+            if (ctrl_msg.type == RXRPC_ABORT)
+            {
+                throw new AbortException(ctrl_msg.to!long.data);
+            }
+        }
+    }
+
+    public void abort(int code)
     {
         MessageHeader!(ulong, int) abort_msg;
         abort_msg.setCallID!0(cast(ulong)cast(void*)this);
@@ -325,6 +349,8 @@ final class ClientCall : Call
         recvMessage(msg, result);
 
         end = updateInProgress(msg);
+        checkAbort(msg);
+
         return result;
     }
 }
@@ -518,6 +544,7 @@ class ServerCall : Call
         awaitingData = true;
 
         recvMessage(msg, result);
+        checkAbort(msg);
 
         end = isEndOfMessage(msg);
         return result;
@@ -551,16 +578,6 @@ class ServerCall : Call
             recvMessage(msg, result);
             inProgress = isEndOfMessage(msg);
         }
-    }
-}
-
-class AbortException : Exception
-{
-    public long code;
-    public this(long c)
-    {
-        super("RX RPC aborted with code " ~ to!string(c) ~ ".");
-        code = c;
     }
 }
 
