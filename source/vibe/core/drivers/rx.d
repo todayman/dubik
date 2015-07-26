@@ -173,6 +173,8 @@ class Call
 
     package this(Socket s)
     {
+        awaitingData = false;
+
         sock = s;
     }
 
@@ -272,11 +274,11 @@ class Call
 final class ClientCall : Call
 {
     MessageHeader!ulong msg;
-    bool inProgress = false;
 
     this(Socket sock, ref sockaddr target)
     {
         super(sock);
+        inProgress = false;
         msg = MessageHeader!ulong();
         // Nwf has an email from dhowells that says this is true
         // Something, something, "trust but verify", etc., etc.
@@ -491,16 +493,11 @@ final class ClientSocket : Socket
 
 class ServerCall : Call
 {
-    private bool awaitingAck;
-
     private ServerSocket.CallResponse entrypoint;
 
     this(ServerSocket s, ServerSocket.CallResponse ep)
     {
         super(s);
-        awaitingData = false;
-        awaitingAck = false;
-
         inProgress = true;
 
         entrypoint = ep;
@@ -546,8 +543,8 @@ class ServerCall : Call
     {
         UntypedMessageHeader msg = buildMsgForIov([]);
         ssize_t result;
-        scope (exit) awaitingAck = false;
-        awaitingAck = true;
+        scope (exit) awaitingData = false;
+        awaitingData = true;
 
         while (inProgress)
         {
@@ -809,7 +806,7 @@ final class ServerSocket : Socket
     private void finalAck(ServerCall call, long payload_length)
     {
         trace("Dispatch finalack...");
-        if (call.awaitingAck)
+        if (call.awaitingData)
         {
             call.sock.core.resumeTask(call.owner);
         }
@@ -823,7 +820,7 @@ final class ServerSocket : Socket
     private void abortCall(ServerCall call, long payload_length)
     {
         trace("Dispatch abort...");
-        if (call.awaitingAck || call.awaitingData)
+        if (call.awaitingData)
         {
             core.resumeTask(call.owner);
         }
