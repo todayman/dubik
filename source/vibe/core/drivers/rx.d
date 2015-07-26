@@ -692,15 +692,10 @@ final class ServerSocket : Socket
         if(!this_call.isNull) {
             ServerCall call = cast(ServerCall)cast(void*)(this_call.get());
             trace("Found call ", cast(void*)call);
-            if(success > 0) {
+            if(success > 0 || this_finack || !this_abort.isNull) {
                 socket_object.deliverData(call);
             }
-            if(this_finack) {
-                socket_object.finalAck(call, success);
-            }
-            if(!this_abort.isNull) {
-                socket_object.abortCall(call, success);
-            }
+
             // XXX Yes?  Maybe?  Is this really when the kernel drops the ID?
             if(!this_abort.isNull || this_finack) {
               writeln("Enabling GC on ", cast(void *)call);
@@ -819,33 +814,4 @@ final class ServerSocket : Socket
 
         return hdr;
     }
-
-    private void finalAck(ServerCall call, long payload_length)
-    {
-        trace("Dispatch finalack...");
-        if (call.awaitingData)
-        {
-            call.sock.core.resumeTask(call.owner);
-        }
-        else
-        {
-            UntypedMessageHeader hdr = recvMessage(payload_length);
-            call.messagebuffer ~= [hdr];
-        }
-    }
-
-    private void abortCall(ServerCall call, long payload_length)
-    {
-        trace("Dispatch abort...");
-        if (call.awaitingData)
-        {
-            core.resumeTask(call.owner);
-        }
-        else
-        {
-            UntypedMessageHeader hdr = recvMessage(payload_length);
-            call.messagebuffer ~= [hdr];
-        }
-    }
-
 }
