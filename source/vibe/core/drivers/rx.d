@@ -317,10 +317,14 @@ final class ClientCall : Call
     }
     ~this()
     {
+        // Don't actually abort here, because that allocates and
+        // we're in a destructor.
+        /*
         if (inProgress)
         {
             abort(0);
         }
+        */
     }
 
     bool send(iovec[] iovs, bool end = true)
