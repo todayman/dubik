@@ -350,6 +350,9 @@ final class ClientCall : Call
         UntypedMessageHeader msg = buildMsgForIov(iovs);
         ssize_t result;
 
+        scope(exit) awaitingData = false;
+        awaitingData = true;
+
         recvMessage(msg, result);
 
         end = updateInProgress(msg);
