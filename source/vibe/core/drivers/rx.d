@@ -655,11 +655,20 @@ class ServerCall : Call
         scope (exit) awaitingData = false;
         awaitingData = true;
 
-        // FIXME to look at control messages for final ack
         while (inProgress)
         {
             recvMessage(msg, result);
-            inProgress = isEndOfMessage(msg);
+            // Check the control messages for the final ACK
+            foreach (ref const UntypedControlMessage ctrl_msg ; msg.ctrl_list)
+            {
+                if (ctrl_msg.level != SOL_RXRPC) { continue; }
+
+                if (ctrl_msg.type == RXRPC_ACK)
+                {
+                    return;
+                }
+            }
+            // TODO check that this does terminate all the time.
         }
     }
 }
