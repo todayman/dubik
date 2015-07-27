@@ -452,6 +452,65 @@ class Socket
         }
     }
 
+    protected void deliverData(Call call)
+    {
+        trace("Entered deliverData");
+        // TODO what if call is awaiting data and there is data in the buffer?
+        // is that a real scenario?
+        if (call.awaitingData)
+        {
+            call.sock.core.resumeTask(call.owner);
+        }
+        else
+        {
+            UntypedMessageHeader hdr = recvMessage();
+
+            // TODO Fix postblit on UntypedMessageHeader
+            call.messagebuffer ~= [hdr];
+        }
+    }
+
+    private UntypedMessageHeader recvMessage(long payload_length = 1500)
+    in {
+        assert(payload_length >= 0);
+    }
+    body {
+        UntypedMessageHeader hdr = UntypedMessageHeader(128);
+
+        do
+        {
+            ubyte[] buffer = new ubyte[payload_length];
+            iovec[] iovs = new iovec[1];
+            iovs[0].iov_base = cast(void*)buffer.ptr;
+            iovs[0].iov_len = buffer.length;
+            hdr.iov = iovs.ptr;
+            hdr.iovlen = iovs.length;
+
+            ssize_t bytes_received = .recvmsg(sock, cast(msghdr*)&hdr, MSG_PEEK);
+
+            if (bytes_received >= 0)
+            {
+                // Make sure to shorten the buffer to only the part that has
+                // been filled.  Updating the base pointer should be a no-op.
+                // TODO Maybe recvmsg changes the length automatically?
+
+                buffer = buffer[0 .. bytes_received];
+                iovs[0].iov_base = cast(void*)buffer.ptr;
+                iovs[0].iov_len = buffer.length;
+            }
+            payload_length *= 2;
+        }
+        while ((hdr.flags & MSG_TRUNC) != 0);
+
+        UntypedMessageHeader empty_hdr = UntypedMessageHeader(1);
+        ssize_t total_bytes = recvmsg(sock, cast(msghdr*)&empty_hdr, 0);
+
+        // We only query recvmsg when we have been notified that there is data
+        // waiting, so there should not be an error here when we extract it.
+        assert(total_bytes >= 0);
+
+        return hdr;
+    }
 }
 
 // Modeled after vibe.core.drivers.libevent2.UDPConnection
@@ -510,17 +569,33 @@ final class ClientSocket : Socket
 
     private static extern(C) void onRecv(evutil_socket_t sock, short what, void* ctx) @system
     {
-        ClientSocket* sock_obj = cast(ClientSocket*) ctx;
+        ClientSocket socket_object = cast(ClientSocket) ctx;
 
         auto hdr = UntypedMessageHeader(128);
-        hdr.iov = null;
-        hdr.iovlen = 0;
-        recvmsg(sock, cast(msghdr*)&hdr, MSG_PEEK);
+        // Put 1 byte in the iovec so we can see if data is coming in
+        iovec i;
+        ubyte[1] buffer;
+        i.iov_base = buffer.ptr;
+        i.iov_len = 1;
+        hdr.iov = &i;
+        hdr.iovlen = 1;
+
+        ssize_t success = .recvmsg(sock, cast(msghdr*)&hdr, MSG_PEEK);
+
+        if (success < 0)
+        {
+            error("Peek Receive failed!");
+            error("Errno = ", errno);
+            return; // TODO this is probably incorrect, since there are tasks
+                    // running and an event loop and things.
+        }
 
         ClientCall call = cast(ClientCall)cast(void*)getCallID(hdr);
-        // Now, the hdr says which call this is associated with in the control
-        // messages, so resume that task
-        call.sock.core.resumeTask(call.owner);
+
+        trace("About to deliver data");
+        trace("Socket object = ", cast(void*)socket_object);
+        trace("Call = ", cast(void*)call);
+        socket_object.deliverData(call);
     }
 }
 
@@ -580,6 +655,7 @@ class ServerCall : Call
         scope (exit) awaitingData = false;
         awaitingData = true;
 
+        // FIXME to look at control messages for final ack
         while (inProgress)
         {
             recvMessage(msg, result);
@@ -645,13 +721,17 @@ final class ServerSocket : Socket
         trace("onRecv!");
         ServerSocket socket_object = cast(ServerSocket)arg;
         auto hdr = UntypedMessageHeader(128);
+
+        // Put 1 byte in the iovec so we can see if data is coming in
         iovec i;
         ubyte[1] buffer;
         i.iov_base = buffer.ptr;
         i.iov_len = 1;
         hdr.iov = &i;
         hdr.iovlen = 1;
+
         ssize_t success = .recvmsg(sock, cast(msghdr*)&hdr, MSG_PEEK);
+
         if (success < 0)
         {
             error("Peek Receive failed!");
@@ -760,65 +840,5 @@ final class ServerSocket : Socket
         ServerCall call = createCall();
         acceptCall(call);
         startCall(call);
-    }
-
-    private void deliverData(ServerCall call)
-    {
-        trace("Entered deliverData");
-        // TODO what if call is awaiting data and there is data in the buffer?
-        // is that a real scenario?
-        if (call.awaitingData)
-        {
-            call.sock.core.resumeTask(call.owner);
-        }
-        else
-        {
-            UntypedMessageHeader hdr = recvMessage();
-
-            // TODO Fix postblit on UntypedMessageHeader
-            call.messagebuffer ~= [hdr];
-        }
-    }
-
-    private UntypedMessageHeader recvMessage(long payload_length = 1500)
-    in {
-        assert(payload_length >= 0);
-    }
-    body {
-        UntypedMessageHeader hdr = UntypedMessageHeader(128);
-
-        do
-        {
-            ubyte[] buffer = new ubyte[payload_length];
-            iovec[] iovs = new iovec[1];
-            iovs[0].iov_base = cast(void*)buffer.ptr;
-            iovs[0].iov_len = buffer.length;
-            hdr.iov = iovs.ptr;
-            hdr.iovlen = iovs.length;
-
-            ssize_t bytes_received = .recvmsg(sock, cast(msghdr*)&hdr, MSG_PEEK);
-
-            if (bytes_received >= 0)
-            {
-                // Make sure to shorten the buffer to only the part that has
-                // been filled.  Updating the base pointer should be a no-op.
-                // TODO Maybe recvmsg changes the length automatically?
-
-                buffer = buffer[0 .. bytes_received];
-                iovs[0].iov_base = cast(void*)buffer.ptr;
-                iovs[0].iov_len = buffer.length;
-            }
-            payload_length *= 2;
-        }
-        while ((hdr.flags & MSG_TRUNC) != 0);
-
-        UntypedMessageHeader empty_hdr = UntypedMessageHeader(1);
-        ssize_t total_bytes = recvmsg(sock, cast(msghdr*)&empty_hdr, 0);
-
-        // We only query recvmsg when we have been notified that there is data
-        // waiting, so there should not be an error here when we extract it.
-        assert(total_bytes >= 0);
-
-        return hdr;
     }
 }
