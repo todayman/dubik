@@ -16,6 +16,9 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+// TODO handle all errors from control messages properly
+// I don't currently check for a bunch of things.
+
 module vibe.core.drivers.rx;
 
 import core.memory : GC;
