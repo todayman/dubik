@@ -1,5 +1,5 @@
 *.a
 .dub
 *.ps
-dubik
+/dubik
 dub.selections.json
