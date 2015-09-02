@@ -6,7 +6,9 @@
     "homepage": "https://github.com/todayman/dubik",
 	"authors": ["Paul O'Neil"],
 	"dependencies": {
-        "vibe-d": "~>0.7.21"
+        "pegged": "~>0.2.1",
+        "vibe-d": "~>0.7.24",
+        "xdr": "~>0.1.0"
 	},
     "targetType": "executable",
     "versions": [
